@@ -1,0 +1,26 @@
+{% extends "tutor/base.html" %}
+{% block title %}Initialize Student{% endblock %}
+
+{% block content %}
+  <h2 class="row">Student setup</h2>
+
+  <div class="card">
+    {% if form.errors %}
+      <div class="errors">
+        <strong>Fix these fields:</strong>
+        {{ form.errors }}
+      </div>
+    {% endif %}
+
+    <form method="post" novalidate>
+      {% csrf_token %}
+      <div class="row">{{ form.studentName.label_tag }} {{ form.studentName }}</div>
+      <div class="row">{{ form.studentSchool.label_tag }} {{ form.studentSchool }}</div>
+      <div class="row">{{ form.studentGrade.label_tag }} {{ form.studentGrade }}</div>
+      <div class="row">{{ form.studentClasses.label_tag }} {{ form.studentClasses }}</div>
+      <button type="submit">Start</button>
+    </form>
+
+    <p class="muted row">After you submit, you will be redirected to Chat.</p>
+  </div>
+{% endblock %}
