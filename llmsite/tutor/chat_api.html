@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AI Tutor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { max-width: 900px; margin: 24px auto; font-family: system-ui, sans-serif; color: #e5e7eb; background: #0b1020; }
+    .card { background: #11162a; padding: 14px; border-radius: 12px; margin-bottom: 12px; }
+    input, textarea { width: 100%; background: #0f152a; color: #e5e7eb; border: 1px solid #2a3356; border-radius: 8px; padding: 10px; }
+    button { background: #335cff; color:#fff; border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+    .msg { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; }
+    .user { background: #1f2937; color: #fff; }
+    .model { background: #0f152a; border: 1px solid #2a3356; }
+  </style>
+</head>
+<body>
+  <h2>AI Tutor, Prototype</h2>
+
+  <div class="card">
+    <h3>Initialize</h3>
+    <p><input id="studentName"  placeholder="Student name" required></p>
+    <p><input id="studentSchool" placeholder="School"></p>
+    <p><input id="studentGrade"  placeholder="Grade"></p>
+    <p><textarea id="studentClasses" rows="2" placeholder="Classes, comma separated"></textarea></p>
+    <button id="btnInit">Initialize</button>
+    <span id="initStatus"></span>
+  </div>
+
+  <div class="card">
+    <div id="thread"></div>
+    <p><textarea id="msg" rows="3" placeholder="Type a message"></textarea></p>
+    <button id="btnSend" disabled>Send</button>
+    <button id="btnReset" style="margin-left:6px">Reset</button>
+  </div>
+
+  <script>
+    function add(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.innerHTML = `<strong>${role === "user" ? "You" : "Tutor"}</strong><br>${text.replace(/\n/g, "<br>")}`;
+      document.getElementById("thread").appendChild(div);
+      div.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+
+    async function postJSON(url, body) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin"
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    document.getElementById("btnInit").onclick = async () => {
+      const payload = {
+        studentName: document.getElementById("studentName").value.trim(),
+        studentSchool: document.getElementById("studentSchool").value.trim(),
+        studentGrade: document.getElementById("studentGrade").value.trim(),
+        studentClasses: document.getElementById("studentClasses").value.trim()
+      };
+      document.getElementById("btnInit").disabled = true;
+      document.getElementById("initStatus").textContent = "Initializing...";
+      try {
+        const data = await postJSON("{% url 'api_init' %}", payload);
+        add("model", data.model_text || "(no text)");
+        document.getElementById("btnSend").disabled = false;
+        document.getElementById("initStatus").textContent = "Initialized";
+      } catch (e) {
+        document.getElementById("initStatus").textContent = "Init failed, " + e.message;
+        document.getElementById("btnInit").disabled = false;
+      }
+    };
+
+    document.getElementById("btnSend").onclick = async () => {
+      const ta = document.getElementById("msg");
+      const message = ta.value.trim();
+      if (!message) return;
+      add("user", message);
+      ta.value = "";
+      document.getElementById("btnSend").disabled = true;
+      try {
+        const data = await postJSON("{% url 'api_chat' %}", { message });
+        add("model", data.model_text || "(no text)");
+      } catch (e) {
+        add("model", "Error, " + e.message);
+      } finally {
+        document.getElementById("btnSend").disabled = false;
+      }
+    };
+
+    document.getElementById("btnReset").onclick = async () => {
+      try {
+        await postJSON("{% url 'api_reset' %}", {});
+        document.getElementById("thread").innerHTML = "";
+        document.getElementById("btnSend").disabled = true;
+        document.getElementById("btnInit").disabled = false;
+        document.getElementById("initStatus").textContent = "Reset";
+      } catch (e) {
+        alert("Reset failed, " + e.message);
+      }
+    };
+  </script>
+</body>
+</html>

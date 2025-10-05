@@ -1,48 +1,68 @@
-from django.shortcuts import render, redirect
-from django.views.decorators.http import require_http_methods
-from .forms import StudentInitForm, MessageForm
-from .services import initialize_student, send_user_message
+from django.http import JsonResponse, HttpResponseBadRequest
+from django.shortcuts import render
+from django.views.decorators.http import require_http_methods, csrf_exempt
+import json
+from languagemodel import StartAIChat, Initialization, SendMessage
 
-SESSION_HISTORY_KEY = "chat_history"
-SESSION_INIT_DONE = "chat_init_done"
+# in-memory registry for prototype use
+CHAT_REGISTRY = {}
 
-def _get_history(request):
-    return request.session.get(SESSION_HISTORY_KEY, [])
+def _session_id(request):
+    if not request.session.session_key:
+        request.session.save()
+    return request.session.session_key
 
-def _save_history(request, history):
-    request.session[SESSION_HISTORY_KEY] = history
-    request.session.modified = True
+def chat_page(request):
+    return render(request, "tutor/chat_api.html")
 
-@require_http_methods(["GET", "POST"])
-def init_view(request):
-    form = StudentInitForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        history = _get_history(request)
-        init_text, updated = initialize_student(
-            history,
-            form.cleaned_data["studentName"],
-            form.cleaned_data["studentSchool"],
-            form.cleaned_data["studentGrade"],
-            form.cleaned_data["studentClasses"],
-        )
-        _save_history(request, updated)
-        request.session[SESSION_INIT_DONE] = True
-        return redirect("chat")
-    return render(request, "tutor/init.html", {"form": form})
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_init(request):
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
 
-@require_http_methods(["GET", "POST"])
-def chat_view(request):
-    if not request.session.get(SESSION_INIT_DONE, False):
-        return redirect("init")
+    name   = (data.get("studentName") or "").strip()
+    school = (data.get("studentSchool") or "").strip()
+    grade  = (data.get("studentGrade") or "").strip()
+    classes = (data.get("studentClasses") or "").strip()
 
-    history = _get_history(request)
-    form = MessageForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        model_text, updated = send_user_message(history, form.cleaned_data["message"])
-        _save_history(request, updated)
-        return redirect("chat")
+    # start a fresh chat
+    chat = StartAIChat()
+    # call Initialization
+    init_text = Initialization(chat, name, school, grade, classes) or ""
 
-    return render(request, "tutor/chat.html", {"form": form, "messages": history})
+    # store the live chat object for this user session
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = chat
 
-def index(request):
-    return redirect("chat")
+    return JsonResponse({"ok": True, "model_text": init_text})
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_chat(request):
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+
+    msg = (data.get("message") or "").strip()
+    if not msg:
+        return HttpResponseBadRequest("message is required")
+
+    sid = _session_id(request)
+    chat = CHAT_REGISTRY.get(sid)
+    if chat is None:
+        return HttpResponseBadRequest("No active chat, initialize first")
+
+    # call SendMessage on the stored chat
+    reply = SendMessage(chat, msg) or ""
+    return JsonResponse({"ok": True, "model_text": reply})
+
+@csrf_exempt
+@require_http_methods(["POST"])
+def api_reset(request):
+    sid = _session_id(request)
+    CHAT_REGISTRY.pop(sid, None)
+    return JsonResponse({"ok": True})
