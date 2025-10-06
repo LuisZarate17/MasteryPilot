@@ -59,7 +59,9 @@ Here are links to issues we worked on but did not complete in this sprint:
 
 Please review the following code files, which were actively developed during this sprint, for quality:
 
-- [main.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/main.py)
+- [languagemodel.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel.py)
+- [views.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/views.py)
+- [chat.html](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/templates/chat.html)
 - [README.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/README.md)
 - [SPRINT-1-REPORT.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/SPRINT-1-REPORT.md)
 
