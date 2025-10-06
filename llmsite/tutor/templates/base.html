@@ -1,38 +1,48 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}AI Tutor{% endblock %}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
 
+  <!-- Tailwind CSS via CDN (for prototype) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#5b6df2', 600: '#3f51d7', 700: '#2f3dad' }
+          }
+        }
+      }
+    }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
-    :root { --bg:#0b1020; --panel:#11162a; --ink:#e5e7eb; --muted:#9ca3af; }
-    html, body { margin:0; padding:0; background:var(--bg); color:var(--ink); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
-    .shell { max-width: 980px; margin: 24px auto; padding: 0 12px; }
-    .nav { display:flex; gap:10px; margin-bottom: 14px; align-items:center; }
-    .nav a { color: var(--ink); text-decoration: none; padding: 6px 10px; border-radius: 8px; background: var(--panel); }
-    .card { background: var(--panel); border-radius: 12px; padding: 14px; }
-    .row { margin-bottom: 12px; }
-    textarea, input[type="text"] { width: 100%; background: #0f152a; color: var(--ink); border: 1px solid #2a3356; border-radius: 8px; padding: 10px; }
-    button { background: #335cff; color:#fff; border: none; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: not-allowed; }
-    .msg { padding: 10px 12px; border-radius: 10px; margin: 8px 0; white-space: pre-wrap; }
-    .msg.user { background: #1f2937; color: #fff; }
-    .msg.model { background: #0f152a; border: 1px solid #2a3356; }
-    .muted { color: var(--muted); }
-    .errors { background: #3b0e14; border: 1px solid #a22; padding: 10px; border-radius: 8px; margin-bottom: 12px; }
+    body { font-family: 'Inter', system-ui, sans-serif; }
   </style>
-
-  {% block head %}{% endblock %}
 </head>
-<body>
-<div class="shell">
-  <div class="nav">
-    <a href="{% url 'init' %}">Initialize</a>
-    <a href="{% url 'chat' %}">Chat</a>
-  </div>
+<body class="bg-gray-50 text-gray-900">
+  <!-- Navbar -->
+  <nav class="bg-white border-b border-gray-200">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
+      <a href="/" class="flex items-center gap-2 font-semibold text-brand-600 text-lg">
+        <div class="h-7 w-7 bg-brand-600 rounded-lg"></div>
+        AI Tutor
+      </a>
+      <div class="flex items-center gap-6 text-sm">
+        <a href="/" class="hover:text-brand-700">Home</a>
+        <a href="/login/" class="hover:text-brand-700">Login</a>
+      </div>
+    </div>
+  </nav>
 
-  {% block content %}{% endblock %}
-</div>
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
 </body>
 </html>

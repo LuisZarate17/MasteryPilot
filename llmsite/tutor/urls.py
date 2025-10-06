@@ -1,7 +1,7 @@
 from django.urls import path
 from .views import chat_page, api_init, api_chat, api_reset
 
-from . import views
+from .views import chat_page, api_init, api_chat, api_reset
 
 urlpatterns = [
     path("", chat_page, name="chat_page"),

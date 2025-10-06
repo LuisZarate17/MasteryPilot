@@ -14,7 +14,7 @@ def _session_id(request):
     return request.session.session_key
 
 def chat_page(request):
-    return render(request, "chat_api.html")
+    return render(request, "chat.html")
 
 @csrf_exempt
 @require_http_methods(["POST"])
