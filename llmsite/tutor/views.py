@@ -24,10 +24,10 @@ def api_init(request):
     except Exception:
         return HttpResponseBadRequest("Invalid JSON")
 
-    name   = (data.get("studentName") or "").strip()
-    school = (data.get("studentSchool") or "").strip()
-    grade  = (data.get("studentGrade") or "").strip()
-    classes = (data.get("studentClasses") or "").strip()
+    name   = "John Doe" #(data.get("studentName") or "").strip()
+    school = "George Washington High School" #(data.get("studentSchool") or "").strip()
+    grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
+    classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
 
     # start a fresh chat
     chat = StartAIChat()
