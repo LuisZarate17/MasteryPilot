@@ -1,8 +1,7 @@
 # Sprint 1 Report (August 18, 2025 - October 10, 2025)
 
 ## YouTube link of Sprint 1 Video
-
-TODO: RECORD VIDEO
+- [Youtube Video:]([https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/main.py](https://www.youtube.com/watch?v=k_eLMM4389k))
 
 ## What's New (User Facing)
 
