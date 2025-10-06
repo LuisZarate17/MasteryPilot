@@ -23,20 +23,28 @@ This AI tutoring system enables school districts to offer personalized learning 
 ### Installation Steps
 
 1. Clone the repository:
-  - git clone https://github.com/Zelefant/CPTS421-AI-Tutor.git
-  - cd CPTS421-AI-Tutor
+```
+git clone https://github.com/Zelefant/CPTS421-AI-Tutor.git
+cd CPTS421-AI-Tutor
+```
 2. Create and activate a virtual environment:
-  - python -m venv .venv # Windows
-  - .venv\Scripts\activate # macOS/Linux
-  - source .venv/bin/activate
+```
+python -m venv .venv # Windows
+.venv\Scripts\activate # macOS/Linux
+source .venv/bin/activate
+```
 3. Upgrade pip and install dependencies:
-  - pip install --upgrade pip
-  - pip install google-generativeai python-dotenv django
+```
+pip install --upgrade pip
+pip install google-generativeai python-dotenv django
+```
 4. Create a .env file in the folder "code" and add your Gemini API key:
-  - GEMINI_API_KEY="your-api-key-here"
+```
+GEMINI_API_KEY="your-api-key-here"
+```
 5. cd into the "llmsite" folder
-6. Run the command: python manage.py runserver
-7. Go to http://127.0.0.1:8000 or whatever the IP address and port the command gives you.
+6. Run the command: `python manage.py runserver`
+7. Go to `http://127.0.0.1:8000` or whatever the IP address and port the command gives you.
 
 ## Functionality
 
@@ -74,6 +82,7 @@ This AI tutoring system enables school districts to offer personalized learning 
 ## License
 
 [See License](LICENSE.txt)
+
 
 
 
