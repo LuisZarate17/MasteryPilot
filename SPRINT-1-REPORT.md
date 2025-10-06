@@ -1,7 +1,7 @@
 # Sprint 1 Report (August 18, 2025 - October 10, 2025)
 
 ## YouTube link of Sprint 1 Video
-- [Youtube Video:](https://www.youtube.com/watch?v=k_eLMM4389k)
+- [[Youtube Video Link]](https://www.youtube.com/watch?v=k_eLMM4389k)
 
 ## What's New (User Facing)
 
