@@ -67,7 +67,7 @@ def Initialization(chat, studentName, studentSchool, studentGrade, studentClasse
         return init_resp.text or str(init_resp)
 
     except Exception as e:
-        print(f"[Init Error] {e}")
+        return f",,,[Init Error] {e},,,"
 
 # Conversation
 def SendMessage(chat, message: str):
@@ -76,4 +76,4 @@ def SendMessage(chat, message: str):
         return response.text or str(response)
 
     except Exception as e:
-        print(f"[Error] {e}")
+        return f",,,[Error] {e},,,"
