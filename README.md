@@ -32,7 +32,7 @@ This AI tutoring system enables school districts to offer personalized learning 
 3. Upgrade pip and install dependencies:
   - pip install --upgrade pip
   - pip install google-generativeai python-dotenv django
-4. Create a .env file in the project root and add your Gemini API key:
+4. Create a .env file in the folder "code" and add your Gemini API key:
   - GEMINI_API_KEY="your-api-key-here"
 5. cd into the "llmsite" folder
 6. Run the command: python manage.py runserver
@@ -74,6 +74,7 @@ This AI tutoring system enables school districts to offer personalized learning 
 ## License
 
 [See License](LICENSE.txt)
+
 
 
 
