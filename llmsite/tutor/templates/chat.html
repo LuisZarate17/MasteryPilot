@@ -22,7 +22,7 @@
       <div class="flex gap-3">
         <div class="h-8 w-8 rounded-full bg-brand-600 shrink-0"></div>
         <div class="bg-gray-100 rounded-2xl px-4 py-2" id="initial-chat">
-          Hi! I’m your AI tutor 🤖 — ask me anything to get started.
+          Typing...
         </div>
       </div>
     </div>
@@ -76,7 +76,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ })
+        body: JSON.stringify({ message: text })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -93,7 +93,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: JSON.stringify({ message: text })
+        body: {}
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();

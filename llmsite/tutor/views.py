@@ -19,10 +19,10 @@ def chat_page(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_init(request):
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except Exception:
-        return HttpResponseBadRequest("Invalid JSON")
+    #try:
+        #data = json.loads(request.body.decode("utf-8"))
+    #except Exception:
+        #return HttpResponseBadRequest("Invalid JSON")
 
     name   = "John Doe" #(data.get("studentName") or "").strip()
     school = "George Washington High School" #(data.get("studentSchool") or "").strip()
