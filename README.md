@@ -1,11 +1,3 @@
-Update your `README.md` using the template below. We are specifically interested in the installation instructions (e.g., all the gems, how to load real or seed data, etc.). This sample README was developed for a Rails project, so you can swap the "Gems" section of the "Installation" instructions to include add-ons that are relevant to you.
-
-If any of the sections in this template grows to more than one screen, consider placing it in its own file and linking to it from this file. Those files could live in a subdirectory called `docs`.
-
-**Make sure to check out the repo anew and test your installation instructions.**
-
-Provide a README file with the following information:
-
 ## System for AI Tutoring
 
 ## Project summary
@@ -14,7 +6,7 @@ A system for school districts to create individual AI tutors for their students,
 
 ### Additional information about the project
 
-TODO: Write a compelling/creative/informative project description / summary
+This AI tutoring system enables school districts to offer personalized learning experiences by providing students with an interactive AI tutor that adapts to their curriculum and skill level. The tutor delivers step-by-step guidance, practice exercises, and quizzes, while teachers can monitor progress, track mastery, and receive alerts if a student struggles. Built for dynamic content generation and strict privacy safeguards, the system supports multiple subjects and student profiles and is designed to scale from individual classrooms to district-wide deployment, with future plans for local LLM usage and advanced analytics dashboards.
 
 ## Installation
 
@@ -30,38 +22,58 @@ TODO: Write a compelling/creative/informative project description / summary
 
 ### Installation Steps
 
-TODO: Describe the installation process (making sure you mention `bundle install`).
-Instructions need to be such that a user can just copy/paste the commands to get things set up and running. 
-
+1. Clone the repository:
+  - git clone https://github.com/Zelefant/CPTS421-AI-Tutor.git
+  - cd CPTS421-AI-Tutor
+2. Create and activate a virtual environment:
+  - python -m venv .venv # Windows
+  - .venv\Scripts\activate # macOS/Linux
+  - source .venv/bin/activate
+3. Upgrade pip and install dependencies:
+  - pip install --upgrade pip
+  - pip install google-generativeai python-dotenv django
+4. Create a .env file in the project root and add your Gemini API key:
+  - GEMINI_API_KEY="your-api-key-here"
+5. cd into the "llmsite" folder
+6. Run the command: python manage.py runserver
+7. Go to http://127.0.0.1:8000 or whatever the IP address and port the command gives you.
 
 ## Functionality
 
-TODO: Write usage instructions. Structuring it as a walkthrough can help structure this section,
-and showcase your features.
+1. Start the application by running the above commands.
+2. The AI tutor will introduce itself and display the initial instructions.
+3. Enter a message describing the topic or problem you want help with.
+4. The tutor will respond with one step at a time. After completing the step, ask it to continue or ask for clarification.
+5. Request quizzes or practice exams by asking the tutor; it will provide them in JSON format.
+6. Submit quiz answers in CSV format; the tutor will return a graded JSON answer key.
+7. The system maintains safeguards to prevent inappropriate content and adheres to the structured step-by-step approach.
 
 
 ## Known Problems
 
-TODO: Describe any known issues, bugs, odd behaviors or code smells. 
-Provide steps to reproduce the problem and/or name a file or a function where the problem lives.
+- Tutor requires internet access to use the Gemini API.
+- Using a local LLM is not yet implemented (#5).
+- Role-based access and teacher monitoring are not yet available (#3, #12).
+- quizzes may require manual correction for complex short answers.
+- All issues are tracked in GitHub, see the Incomplete Issues/User Stories section in the sprint report.
 
 
 ## Contributing
 
-TODO: Leave the steps below if you want others to contribute to your project.
-
-1. Fork it!
-2. Create your feature branch: `git checkout -b my-new-feature`
-3. Commit your changes: `git commit -am 'Add some feature'`
-4. Push to the branch: `git push origin my-new-feature`
-5. Submit a pull request :D
+1. Fork the repository.
+2. Create your feature branch: git checkout -b my-new-feature.
+3. Make your changes and commit: git commit -am 'Add some feature'.
+4. Push to the branch: git push origin my-new-feature.
+5. Submit a pull request for review.
 
 ## Additional Documentation
 
-TODO: Provide links to additional documentation that may exist in the repo, e.g.,
-  * Sprint reports
-  * User links
+- [Sprint 1 Report](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/SPRINT-1-REPORT.md) – Overview of work completed and unfinished work.
+- [GitHub Issues](https://github.com/Zelefant/CPTS421-AI-Tutor/issues) - Current issues, user stories, and progress tracking.
 
 ## License
 
 [See License](LICENSE.txt)
+
+
+

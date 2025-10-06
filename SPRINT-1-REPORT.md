@@ -25,55 +25,57 @@ We began our research into using LLMs for tutoring purposes. We did experimentat
 
 Here are links to the issues that we completed in this sprint:
 
-- URL of issue 1
-- URL of issue 2
-- URL of issue n
-
-Reminders (Remove this section when you save the file):
-
-- Each issue should be assigned to a milestone
-- Each completed issue should be assigned to a pull request
-- Each completed pull request should include a link to a "Before and After" video
-- All team members who contributed to the issue should be assigned to it on GitHub
-- Each issue should be assigned story points using a label
-- Story points contribution of each team member should be indicated in a comment
+- #9: Quiz System with JSON – Fully implemented JSON-based quiz generation and grading.
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/9
+- #2: Web UI – Base HTML and server integration started and functional in prototype.
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/2
+- #7: Privacy Features and Documentation – Prompt safeguards added to prevent inappropriate content and ensure user data protection.
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7
+- #15: Documentation for Local Server Set-up – Installation and .env setup instructions written and tested.
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/15
 
 ## Incomplete Issues/User Stories
 
 Here are links to issues we worked on but did not complete in this sprint:
 
-- URL of issue 1 <<One sentence explanation of why issue was not completed>>
-- URL of issue 2 <<One sentence explanation of why issue was not completed>>
-- URL of issue n <<One sentence explanation of why issue was not completed>>
-
-Examples of explanations (Remove this section when you save the file):
-
-- "We ran into a complication we did not anticipate (explain briefly)."
-- "We decided that the feature did not add sufficient value for us to work on it in this sprint (explain briefly)."
-- "We could not reproduce the bug" (explain briefly).
-- "We did not get to this issue because..." (explain briefly)
-
+- #3: Role-based Access and Rostering
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/3 - <<Database schema design started, authentication not implemented.>>
+- #5: Local Language Model
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/5 - <<Researching, still testing local deployment options>>
+- #6: Audit and Diagnostics System
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/6 - <<Logging planned but not connected yet.>>
+- #10: Content and PDF Ingestion with RAG
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/10 - <<Research ongoing.>>
+- #11: Student-defined Objectives and Mastery Criteria
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/11 - <<Outline drafted, not implemented.>>
+- #12: Classroom Monitoring
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/12 - <<Backend integration pending.>>
+- #13: Accessibility Features (WCAG 2.2 AA)
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/13 - <<Front-end testing not done.>>
+- #14: Account System with OAuth
+      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/14 - <<OAuth flow still in development.>>
+  
 ## Code Files for Review
 
 Please review the following code files, which were actively developed during this sprint, for quality:
 
-- [Name of code file 1](https://github.com/your_repo/file_extension)
-- [Name of code file 2](https://github.com/your_repo/file_extension)
-- [Name of code file 3](https://github.com/your_repo/file_extension)
+- [main.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/main.py)
+- [README.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/README.md)
+- [SPRINT-1-REPORT.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/SPRINT-1-REPORT.md)
 
 ## Retrospective Summary
 
 Here's what went well:
 
-- Item 1
-- Item 2
-- Item x
+- Research into prompt engineering
+- Usage of JSON and CSV for quiz system
+- Connection to LLM via API
+- Creation of web app UI
 
 Here's what we'd like to improve:
 
-- Item 1
-- Item 2
-- Item x
+- Roles and account system
+- Connection to a local LLM rather than to Gemini's cloud-based LLM
 
 Here are changes we plan to implement in the next sprint:
 
