@@ -22,7 +22,7 @@
       <div class="flex gap-3">
         <div class="h-8 w-8 rounded-full bg-brand-600 shrink-0"></div>
         <div class="bg-gray-100 rounded-2xl px-4 py-2" id="initial-chat">
-          Typing...
+          Initializing...
         </div>
       </div>
     </div>
@@ -31,9 +31,10 @@
     <div class="border-t p-3">
       <form id="chatForm" class="flex items-center gap-2">
         <input id="chatInput" class="flex-1 rounded-xl border px-3 py-2 focus:ring-2 focus:ring-brand-500" placeholder="Type your question...">
-        <button class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Send</button>
+        <button id="chat-send-button" class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Send</button>
       </form>
     </div>
+    <div id="typing-alert-div" class="px-4 py-2 font-semibold"></div>
   </section>
 
   <!-- Right Sidebar (Notes / Resources) -->
@@ -59,6 +60,7 @@
   const chatForm = document.getElementById("chatForm");
   const chatInput = document.getElementById("chatInput");
   const chatLog = document.getElementById("chatLog");
+  const typingAlertDiv = document.getElementById("typing-alert-div");
   const initialChat = document.getElementById("initial-chat");
 
   initializeChat();
@@ -70,6 +72,8 @@
 
     appendMessage("user", text);
     chatInput.value = "";
+    
+    await showTypingAlert();
 
     try {
       const res = await fetch("{% url 'api_chat' %}", {
@@ -84,10 +88,13 @@
     } catch (err) {
       appendMessage("model", "Error: " + err.message);
     }
+
+    await removeTypingAlert();
   });
 
   async function initializeChat()
   {
+    await showTypingAlert();
     try {
       const res = await fetch("{% url 'api_init' %}", {
         method: "POST",
@@ -104,6 +111,24 @@
 
       initialChat.innerText = "Error: " + err.message;
     }
+
+    await removeTypingAlert();
+  }
+
+  function showTypingAlert()
+  {
+    const alert = document.createElement("p");
+    alert.id = "typing-alert-message";
+    alert.innerHTML = "Your AI tutor is typing...";
+    typingAlertDiv.appendChild(alert);
+
+    document.getElementById("chat-send-button").disabled = true;
+  }
+
+  function removeTypingAlert()
+  {
+    typingAlertDiv.removeChild(document.getElementById("typing-alert-message"));
+    document.getElementById("chat-send-button").disabled = false;
   }
 
   function appendMessage(role, text) {
