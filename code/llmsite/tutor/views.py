@@ -3,7 +3,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 import json
-from languagemodel import StartAIChat, Initialization, SendMessage
+from code.llmsite.languagemodel import InitModel, InitChat, SendMessage
 
 # in-memory registry for prototype use
 CHAT_REGISTRY = {}

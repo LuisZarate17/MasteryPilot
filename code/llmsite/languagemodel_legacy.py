@@ -1,6 +1,4 @@
 import google.generativeai as genai
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from dotenv import load_dotenv
 import os
 
@@ -37,67 +35,47 @@ Here is your student's information:
 """
 
 
-def InitModel():
+def StartAIChat():
 
-    # Get Language Model
+    # Get API Key
 
     load_dotenv()
 
-    model_id = os.getenv("LANGUAGE_MODEL_ID")
+    api_key = os.getenv("GEMINI_API_KEY")
 
-    if model_id:
+    if api_key:
         pass
     else:
-        raise ValueError("LANGUAGE_MODEL_ID is missing from .env file.")
+        raise ValueError("GEMINI_API_KEY is missing from .env file.")
 
-    cfg = AutoConfig.from_pretrained(model_id)
-    print("Loading model " + model_id + " with context window " + cfg.max_position_embeddings)
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
+    genai.configure(api_key=api_key)
+
+    # Set Up 
+
+    model = genai.GenerativeModel("gemini-2.5-pro")
+    chat = model.start_chat(history=[])
+
+    return chat
 
 
-
-    return (model, tokenizer)
-
-
-def InitializationPrompt(studentName, studentSchool, studentGrade, studentClasses):
+def Initialization(chat, studentName, studentSchool, studentGrade, studentClasses):
 
     INITIALIZATION_PROMPT_2 = f"Name: {studentName} \nSchool: {studentSchool} \nGrade: {studentGrade} \nCurrent Classes: {studentClasses}\n-@-"
 
     INITIALIZATION_PROMPT = INITIALIZATION_PROMPT_1 + INITIALIZATION_PROMPT_2
     
-    return INITIALIZATION_PROMPT
+    try:
+        init_resp = chat.send_message(INITIALIZATION_PROMPT)
+        return init_resp.text or str(init_resp)
 
-def StartChat(model, tokenizer):
-    messages = [
-        {
-            "role": "system",
-            "content": InitializationPrompt()
-        }
-    ]
-
-    chat_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    inputs = tokenizer(chat_prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_new_tokens=150)
-
-    reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    return reply
+    except Exception as e:
+        return f",,,[Init Error] {e},,,"
 
 # Conversation
-def SendMessage(model, tokenizer, messages, new_message):
-    new_message_dic = {
-        "role": "user",
-        "content": new_message
-    }
-    messages.append(new_message_dic)
+def SendMessage(chat, message: str):
+    try:
+        response = chat.send_message(message)
+        return response.text or str(response)
 
-    chat_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    inputs = tokenizer(chat_prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_new_tokens=150)
-
-    reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
-
-    return reply
+    except Exception as e:
+        return f",,,[Error] {e},,,"
