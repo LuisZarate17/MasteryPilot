@@ -1,0 +1,16 @@
+Project TODOs
+
+A) Set server-side active session immediately in api_new_session
+   - When creating a new Session via api_new_session, also set request.session['session_id'] so server and client agree on the active session without requiring an additional api_init.
+   - Update tests and client behavior accordingly.
+
+B) Wire sidebar session items to open an existing session
+   - Make session list items clickable.
+   - Clicking should call a backend endpoint (set_session) to set request.session['session_id'], then load/restore the session chat history into the chat view.
+
+C) Persist chat history per session and restore on open
+   - Save Chat messages in the DB as they arrive (user and assistant).
+   - Add an endpoint to fetch chat history for a given session and render it in the chat log when the session is opened.
+
+Extra: Make sessions in the left sidebar clickable (frontend)
+   - Ensure clicking a left-sidebar session item sets the active session and loads its data.
