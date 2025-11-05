@@ -8,6 +8,7 @@ User = get_user_model()
 class Session(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     owner = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name="sessions")
+    title = models.CharField(max_length=200, default="New session")
     created_at = models.DateTimeField(auto_now_add=True)
 
 

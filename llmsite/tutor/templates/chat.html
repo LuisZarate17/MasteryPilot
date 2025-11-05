@@ -87,6 +87,7 @@
   const quizFeedbackModal = document.getElementById("quizFeedbackModal");
   const quizFeedbackContent = document.getElementById("quizFeedbackContent");
   const closeQuizFeedback = document.getElementById("closeQuizFeedback");
+  let currentSessionId = null;
 
   let quizActive = false;
 
@@ -354,22 +355,57 @@
 
     // Initialization flow: create a session and initialize the model
     document.getElementById("newSession").addEventListener("click", async () => {
+      // Prompt for optional session title and student info
+      const title = prompt("Session title (optional):") || "New session";
       const name = prompt("Student name:") || "";
       const school = prompt("School:") || "";
       const grade = prompt("Grade:") || "";
       const classes = prompt("Classes (comma separated):") || "";
+
       try {
-        const res = await fetch("{% url 'api_init' %}", {
+        // Create the session on the backend
+        const res = await fetch("{% url 'api_new_session' %}", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify({ studentName: name, studentSchool: school, studentGrade: grade, studentClasses: classes })
+          body: JSON.stringify({ title })
         });
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
-        appendMessage("model", data.model_text || "(no text)");
+        currentSessionId = data.id;
+
+        // Prepend session to sidebar list
+        const li = document.createElement('li');
+        li.className = 'p-2 rounded-lg hover:bg-gray-50';
+        li.dataset.sessionId = data.id;
+        li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
+        const sessionList = document.getElementById('sessionList');
+        sessionList.prepend(li);
+
+        // Clear the chat log and show a brief welcome message
+        chatLog.innerHTML = '';
+        appendMessage('model', `Session created: ${data.title}`);
+
+        // Optionally seed the model by calling api_init with the same student info and the session id
+        try {
+          const initRes = await fetch("{% url 'api_init' %}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ studentName: name, studentSchool: school, studentGrade: grade, studentClasses: classes, session_id: currentSessionId })
+          });
+          if (initRes.ok) {
+            const initData = await initRes.json();
+            // replace the temporary welcome with the model's initialization text
+            chatLog.innerHTML = '';
+            appendMessage('model', initData.model_text || '(no text)');
+          }
+        } catch (e) {
+          // ignore init failures but keep session
+          console.debug('init seed failed', e);
+        }
       } catch (err) {
-        appendMessage("model", "Init error: " + err.message);
+        alert('Create session failed: ' + err.message);
       }
     });
 </script>
