@@ -98,7 +98,13 @@ def api_chat(request):
     if not msg:
         return HttpResponseBadRequest("message is required")
 
-    sid = _session_id(request)
+    # The initialization endpoint stores the live chat in CHAT_REGISTRY
+    # keyed by the created Session DB id (stored in request.session['session_id']).
+    # Use that stored session id to look up the live chat. Fall back to the
+    # Django session key for backward compatibility.
+    sid = request.session.get("session_id") or _session_id(request)
+    # ensure string key form matches how we store it in api_init
+    sid = str(sid)
     chat = CHAT_REGISTRY.get(sid)
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
