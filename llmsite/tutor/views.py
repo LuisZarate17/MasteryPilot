@@ -1,8 +1,11 @@
+#import profile
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 import json
+
+from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
 
 # in-memory registry for prototype use
@@ -20,14 +23,21 @@ def chat_page(request):
 @require_http_methods(["POST"])
 def api_init(request):
     #try:
-        #data = json.loads(request.body.decode("utf-8"))
+        #data = json.loads(request.body.decode("utf-6"))
     #except Exception:
         #return HttpResponseBadRequest("Invalid JSON")
 
-    name   = "John Doe" #(data.get("studentName") or "").strip()
-    school = "George Washington High School" #(data.get("studentSchool") or "").strip()
-    grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
-    classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
+    #name   = "John Doe" #(data.get("studentName") or "").strip()
+    #school = "George Washington High School" #(data.get("studentSchool") or "").strip()
+    #grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
+    #classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
+    profile = request.user.studentprofile
+
+    name = profile.user.get_full_name() or profile.user.username
+    school = profile.school
+    grade = profile.grade
+    classes = profile.classes
+
 
     # start a fresh chat
     chat = StartAIChat()
