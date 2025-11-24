@@ -1,9 +1,12 @@
+#import profile
 from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 import json
+
+from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
 from .models import Session, Chat as DBChat
 
@@ -44,6 +47,31 @@ def api_new_session(request):
 def api_init(request):
     if not request.user.is_authenticated:
         return JsonResponse({"ok": False, "error": "authentication required"}, status=401)
+    #try:
+        #data = json.loads(request.body.decode("utf-6"))
+    #except Exception:
+        #return HttpResponseBadRequest("Invalid JSON")
+
+    #name   = "John Doe" #(data.get("studentName") or "").strip()
+    #school = "George Washington High School" #(data.get("studentSchool") or "").strip()
+    #grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
+    #classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
+    profile = request.user.studentprofile
+
+    name = profile.user.get_full_name() or profile.user.username
+    school = profile.school
+    grade = profile.grade
+    classes = profile.classes
+
+
+    # start a fresh chat
+    chat = StartAIChat()
+    # call Initialization
+    init_text = Initialization(chat, name, school, grade, classes) or ""
+
+    # store the live chat object for this user session
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = chat
 
     try:
         data = json.loads(request.body.decode("utf-8")) if request.body else {}
