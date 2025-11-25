@@ -4,6 +4,9 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
+from django.contrib.auth import login
+from django.shortcuts import render, redirect
+from .forms import SignupForm
 import json
 
 from httpx import request
@@ -20,6 +23,17 @@ def _session_id(request):
 
 def chat_page(request):
     return render(request, "chat.html")
+
+def signup(request):
+    if request.method == "POST":
+        form = SignupForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            return redirect("/")
+    else:
+        form = SignupForm()
+    return render(request, "signup.html", {"form": form})
 
 
 @csrf_exempt
@@ -56,12 +70,17 @@ def api_init(request):
     #school = "George Washington High School" #(data.get("studentSchool") or "").strip()
     #grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
     #classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
-    profile = request.user.studentprofile
-
-    name = profile.user.get_full_name() or profile.user.username
-    school = profile.school
-    grade = profile.grade
-    classes = profile.classes
+    try:
+        profile = request.user.studentprofile
+        name = profile.user.get_full_name() or profile.user.username
+        school = profile.school
+        grade = profile.grade
+        classes = profile.classes
+    except Exception:
+        name = request.user.get_full_name() or request.user.username
+        school = ""
+        grade = ""
+        classes = ""
 
 
     # start a fresh chat

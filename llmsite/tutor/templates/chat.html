@@ -24,7 +24,9 @@
       <div class="bg-white border rounded-2xl shadow p-6">
         <h3 class="font-semibold text-lg mb-2">Quiz</h3>
         <form id="quizForm" class="space-y-4"></form>
-        <button id="submitQuizBtn" class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Submit Answers</button>
+        <button id="submitQuizBtn"
+          class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Submit
+          Answers</button>
       </div>
     </div>
 
@@ -40,18 +42,22 @@
     <!-- Message Input -->
     <div class="border-t p-3">
       <form id="chatForm" class="flex items-center gap-2">
-        <input id="chatInput" class="flex-1 rounded-xl border px-3 py-2 focus:ring-2 focus:ring-brand-500" placeholder="Type your question...">
-        <button id="chat-send-button" class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Send</button>
+        <input id="chatInput" class="flex-1 rounded-xl border px-3 py-2 focus:ring-2 focus:ring-brand-500"
+          placeholder="Type your question...">
+        <button id="chat-send-button"
+          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Send</button>
       </form>
     </div>
     <div id="typing-alert-div" class="px-4 py-2 font-semibold"></div>
 
     <!-- Quiz Feedback Modal (hidden by default) -->
-    <div id="quizFeedbackModal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+    <div id="quizFeedbackModal"
+      class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
       <div class="bg-white rounded-2xl shadow-lg p-6 max-w-md w-full">
         <h3 class="font-semibold text-lg mb-2">Quiz Results</h3>
         <div id="quizFeedbackContent" class="mb-4"></div>
-        <button id="closeQuizFeedback" class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Close</button>
+        <button id="closeQuizFeedback"
+          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Close</button>
       </div>
     </div>
   </section>
@@ -173,7 +179,7 @@
     if (match) {
       try {
         return JSON.parse(match[0]);
-      } catch (e) {}
+      } catch (e) { }
     }
     // Try parsing the whole string
     try {
@@ -196,7 +202,7 @@
       if (qdata.type === "multiple-choice" && qdata.answers) {
         html += `<div class='space-y-1 mt-1'>`;
         qdata.answers.forEach((ans, i) => {
-          html += `<label class='flex items-center gap-2'><input type='radio' name='${qid}' value='${i+1}' class='form-radio'>${ans}</label>`;
+          html += `<label class='flex items-center gap-2'><input type='radio' name='${qid}' value='${i + 1}' class='form-radio'>${ans}</label>`;
         });
         html += `</div>`;
       } else if (qdata.type === "short-answer") {
@@ -272,7 +278,7 @@
       if (start !== -1 && end !== -1 && end > start) {
         try {
           results = JSON.parse(feedbackText.slice(start, end + 1));
-        } catch {}
+        } catch { }
       }
     }
     if (results && typeof results === "object") {
@@ -307,15 +313,14 @@
     quizFeedbackContent.innerText = "";
   });
 
-  async function initializeChat()
-  {
+  async function initializeChat() {
     await showTypingAlert();
     try {
       const res = await fetch("{% url 'api_init' %}", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
-        body: {}
+        body: JSON.stringify({})
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -326,8 +331,7 @@
     await removeTypingAlert();
   }
 
-  function showTypingAlert()
-  {
+  function showTypingAlert() {
     const alert = document.createElement("p");
     alert.id = "typing-alert-message";
     alert.innerHTML = "Your AI tutor is typing...";
@@ -335,8 +339,7 @@
     document.getElementById("chat-send-button").disabled = true;
   }
 
-  function removeTypingAlert()
-  {
+  function removeTypingAlert() {
     const alert = document.getElementById("typing-alert-message");
     if (alert) typingAlertDiv.removeChild(alert);
     document.getElementById("chat-send-button").disabled = false;
@@ -353,60 +356,60 @@
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
-    // Initialization flow: create a session and initialize the model
-    document.getElementById("newSession").addEventListener("click", async () => {
-      // Prompt for optional session title and student info
-      const title = prompt("Session title (optional):") || "New session";
-      const name = prompt("Student name:") || "";
-      const school = prompt("School:") || "";
-      const grade = prompt("Grade:") || "";
-      const classes = prompt("Classes (comma separated):") || "";
+  // Initialization flow: create a session and initialize the model
+  document.getElementById("newSession").addEventListener("click", async () => {
+    // Prompt for optional session title and student info
+    const title = prompt("Session title (optional):") || "New session";
+    const name = prompt("Student name:") || "";
+    const school = prompt("School:") || "";
+    const grade = prompt("Grade:") || "";
+    const classes = prompt("Classes (comma separated):") || "";
 
+    try {
+      // Create the session on the backend
+      const res = await fetch("{% url 'api_new_session' %}", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ title })
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      currentSessionId = data.id;
+
+      // Prepend session to sidebar list
+      const li = document.createElement('li');
+      li.className = 'p-2 rounded-lg hover:bg-gray-50';
+      li.dataset.sessionId = data.id;
+      li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
+      const sessionList = document.getElementById('sessionList');
+      sessionList.prepend(li);
+
+      // Clear the chat log and show a brief welcome message
+      chatLog.innerHTML = '';
+      appendMessage('model', `Session created: ${data.title}`);
+
+      // Optionally seed the model by calling api_init with the same student info and the session id
       try {
-        // Create the session on the backend
-        const res = await fetch("{% url 'api_new_session' %}", {
+        const initRes = await fetch("{% url 'api_init' %}", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify({ title })
+          body: JSON.stringify({ studentName: name, studentSchool: school, studentGrade: grade, studentClasses: classes, session_id: currentSessionId })
         });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        currentSessionId = data.id;
-
-        // Prepend session to sidebar list
-        const li = document.createElement('li');
-        li.className = 'p-2 rounded-lg hover:bg-gray-50';
-        li.dataset.sessionId = data.id;
-        li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
-        const sessionList = document.getElementById('sessionList');
-        sessionList.prepend(li);
-
-        // Clear the chat log and show a brief welcome message
-        chatLog.innerHTML = '';
-        appendMessage('model', `Session created: ${data.title}`);
-
-        // Optionally seed the model by calling api_init with the same student info and the session id
-        try {
-          const initRes = await fetch("{% url 'api_init' %}", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ studentName: name, studentSchool: school, studentGrade: grade, studentClasses: classes, session_id: currentSessionId })
-          });
-          if (initRes.ok) {
-            const initData = await initRes.json();
-            // replace the temporary welcome with the model's initialization text
-            chatLog.innerHTML = '';
-            appendMessage('model', initData.model_text || '(no text)');
-          }
-        } catch (e) {
-          // ignore init failures but keep session
-          console.debug('init seed failed', e);
+        if (initRes.ok) {
+          const initData = await initRes.json();
+          // replace the temporary welcome with the model's initialization text
+          chatLog.innerHTML = '';
+          appendMessage('model', initData.model_text || '(no text)');
         }
-      } catch (err) {
-        alert('Create session failed: ' + err.message);
+      } catch (e) {
+        // ignore init failures but keep session
+        console.debug('init seed failed', e);
       }
-    });
+    } catch (err) {
+      alert('Create session failed: ' + err.message);
+    }
+  });
 </script>
 {% endblock %}
