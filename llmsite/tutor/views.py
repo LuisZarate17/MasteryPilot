@@ -3,7 +3,7 @@ from django.http import JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login
 from django.shortcuts import render, redirect
 from .forms import SignupForm
@@ -12,6 +12,7 @@ import json
 from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
 from .models import Session, Chat as DBChat
+from .utils import is_teacher_or_admin
 
 # in-memory registry for prototype use
 CHAT_REGISTRY = {}
@@ -23,6 +24,11 @@ def _session_id(request):
 
 def chat_page(request):
     return render(request, "chat.html")
+
+@login_required
+@user_passes_test(is_teacher_or_admin)
+def dashboard_page(request):
+    return render(request, "dashboard_admin_mentor.html")
 
 def signup(request):
     if request.method == "POST":

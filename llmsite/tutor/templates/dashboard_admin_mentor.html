@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard · AI Tutor{% endblock %}
+
+{% block content %}
+<div class="grid lg:grid-cols-[240px_minmax(0,1fr)] gap-6">
+
+  <!-- Sidebar Navigation -->
+  <aside class="bg-white rounded-2xl border shadow-sm p-4">
+    <div class="mb-3">
+      <h3 class="font-semibold text-gray-900">Dashboard</h3>
+      <p class="text-xs text-gray-500 mt-1">Teacher and admin controls</p>
+    </div>
+
+    <nav>
+      <ul id="dashboardNav" class="space-y-1 text-sm">
+        <li>
+          <button
+            class="w-full text-left p-2 rounded-lg bg-gray-100 font-medium text-gray-900 hover:bg-gray-100"
+            data-section="students">
+            Students
+          </button>
+        </li>
+        <li>
+          <button
+            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
+            data-section="curriculum">
+            Curriculum
+          </button>
+        </li>
+        <li>
+          <button
+            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
+            data-section="intervention">
+            Intervention
+          </button>
+        </li>
+        <li>
+          <button
+            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
+            data-section="accounts">
+            Accounts
+          </button>
+        </li>
+        <li>
+          <button
+            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
+            data-section="export">
+            Export Data
+          </button>
+        </li>
+      </ul>
+    </nav>
+  </aside>
+
+  <!-- Main Dashboard Content Area -->
+  <section class="bg-white rounded-2xl border shadow-sm flex flex-col p-6">
+    <header class="mb-4 border-b pb-3">
+      <h2 id="dashboardSectionTitle" class="text-lg font-semibold text-gray-900">
+        Dashboard
+      </h2>
+      <p class="text-sm text-gray-500">
+        Select an item from the sidebar to view details.
+      </p>
+    </header>
+
+    <!-- Placeholder content, will be replaced when sections are wired up -->
+    <div id="dashboardContent" class="flex-1 flex items-center justify-center text-gray-400 text-sm">
+      <p>Nothing is loaded yet. Choose Students, Curriculum, Intervention, Accounts, or Export Data from the sidebar.</p>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Simple client-side highlighting and title update.
+  // You can replace this later with real content loading.
+  const nav = document.getElementById("dashboardNav");
+  const sectionTitle = document.getElementById("dashboardSectionTitle");
+  const content = document.getElementById("dashboardContent");
+
+  if (nav) {
+    nav.addEventListener("click", (e) => {
+      const button = e.target.closest("button[data-section]");
+      if (!button) return;
+
+      // Clear active styling
+      Array.from(nav.querySelectorAll("button")).forEach(btn => {
+        btn.classList.remove("bg-gray-100", "font-medium", "text-gray-900");
+        btn.classList.add("hover:bg-gray-50", "text-gray-700");
+      });
+
+      // Set active styling
+      button.classList.add("bg-gray-100", "font-medium", "text-gray-900");
+      button.classList.remove("hover:bg-gray-50", "text-gray-700");
+
+      const sectionKey = button.dataset.section;
+      let title = "Dashboard";
+
+      if (sectionKey === "students") title = "Students";
+      if (sectionKey === "curriculum") title = "Curriculum";
+      if (sectionKey === "intervention") title = "Intervention";
+      if (sectionKey === "accounts") title = "Accounts";
+      if (sectionKey === "export") title = "Export Data";
+
+      sectionTitle.textContent = title;
+      content.innerHTML = `
+        <div class="text-center text-gray-500 text-sm">
+          <p>${title} view is not set up yet.</p>
+          <p class="mt-1">You can render tables, charts, or forms here later.</p>
+        </div>
+      `;
+    });
+  }
+</script>
+{% endblock %}

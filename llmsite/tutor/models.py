@@ -2,6 +2,7 @@
 from django.db import models
 from django.contrib.auth import get_user_model
 import uuid
+from django.conf import settings
 
 User = get_user_model()
 
@@ -54,10 +55,20 @@ class QuizAnswer(models.Model):
 from django.contrib.auth.models import User
 
 class StudentProfile(models.Model):
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     school = models.CharField(max_length=200, blank=True)
     grade = models.CharField(max_length=50, blank=True)
     classes = models.TextField(blank=True)  # comma-separated list
 
     def __str__(self):
         return self.user.username
+
+class TeacherProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    students = []
+    
+    def __str__(self):
+        return self.user.username
+    
+class AdminProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
