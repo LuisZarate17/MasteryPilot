@@ -31,3 +31,7 @@ class SignupForm(UserCreationForm):
                 classes=self.cleaned_data.get("classes")
             )
         return user
+    
+class UploadRagForm(forms.Form):
+    title = forms.CharField(max_length=100)
+    file = forms.FileField()

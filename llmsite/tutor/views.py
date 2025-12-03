@@ -1,13 +1,16 @@
 #import profile
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect
-from .forms import SignupForm
+from django.conf import settings
+from django.utils.text import get_valid_filename
+from .forms import SignupForm, UploadRagForm
 import json
+import os
 
 from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
@@ -24,6 +27,7 @@ def _session_id(request):
     return request.session.session_key
 
 def chat_page(request):
+    #TODO: make teachers and admins redirect to dashboard
     return render(request, "chat.html")
 
 @login_required
@@ -31,16 +35,62 @@ def chat_page(request):
 def dashboard_page(request):
     teachers = TeacherProfile.objects.select_related("user").all()
     admins = AdminProfile.objects.select_related("user").all()
-    students = StudentProfile.objects.select_related("user").all()
+    is_admin_flag = is_admin(request.user)
+    try:
+        teacher_profile = TeacherProfile.objects.get(user=request.user)
+    except TeacherProfile.DoesNotExist:
+        teacher_profile = None
+
+    is_teacher_flag = teacher_profile is not None
+
+    # Provide all students to admins
+    if is_admin_flag:
+        students = StudentProfile.objects.select_related("user", "teacher").all()
+    # Provide only assigned students to teachers
+    elif is_teacher_flag:
+        students = StudentProfile.objects.select_related("user", "teacher").filter(
+            teacher=teacher_profile
+        )
+    else:
+        students = StudentProfile.objects.none()
+
+    files = []
+    if os.path.exists(settings.CURRICULUM_ROOT):
+        files = sorted(os.listdir(settings.CURRICULUM_ROOT))
 
     context = {
         "teachers": teachers,
         "admins": admins,
         "students": students,
-        "is_admin": is_admin(request.user),
+        "curriculum_files": files,
+        "is_admin": is_admin_flag,
+        "is_teacher": is_teacher_flag,
     }
 
     return render(request, "dashboard_admin_mentor.html", context)
+
+@login_required
+@user_passes_test(is_teacher_or_admin)
+def curriculum_view(request, filename):
+    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+
+    if not os.path.exists(path):
+        raise Http404("File not found")
+
+    return FileResponse(open(path, "rb"), as_attachment=False)
+
+@login_required
+@user_passes_test(is_admin)
+@require_http_methods(["POST"])
+def curriculum_delete(request):
+    filename = request.POST.get("filename") or ""
+
+    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+
+    if os.path.exists(path):
+        os.remove(path)
+
+    return redirect("dashboard")
 
 def signup(request):
     if request.method == "POST":
@@ -116,6 +166,41 @@ def account_delete(request):
         return redirect("dashboard")
 
     user.delete()
+
+    return redirect("dashboard")
+
+@require_http_methods(["POST"])
+@login_required
+@user_passes_test(is_admin)
+def student_edit(request):
+    student_id_raw = request.POST.get("student_id")
+    classes = (request.POST.get("classes") or "").strip()
+    teacher_id_raw = request.POST.get("teacher_id")
+
+    # Guard against missing or non numeric student id
+    try:
+        student_id = int(student_id_raw)
+    except (TypeError, ValueError):
+        return redirect("dashboard")
+
+    try:
+        student = StudentProfile.objects.get(id=student_id)
+    except StudentProfile.DoesNotExist:
+        return redirect("dashboard")
+
+    student.classes = classes
+
+    # Clean teacher id too
+    teacher = None
+    if teacher_id_raw not in (None, "", "undefined"):
+        try:
+            teacher_id = int(teacher_id_raw)
+            teacher = TeacherProfile.objects.get(id=teacher_id)
+        except (ValueError, TeacherProfile.DoesNotExist):
+            teacher = None
+
+    student.teacher = teacher
+    student.save()
 
     return redirect("dashboard")
 
@@ -249,3 +334,31 @@ def api_reset(request):
     sid = _session_id(request)
     CHAT_REGISTRY.pop(sid, None)
     return JsonResponse({"ok": True})
+
+
+@login_required
+@user_passes_test(is_teacher_or_admin)
+@require_http_methods(["POST"])
+def upload_curriculum(request):
+    title = (request.POST.get("title") or "").strip()
+    file = request.FILES.get("file")
+
+    if not file:
+        return redirect("dashboard")
+
+    filename = get_valid_filename(file.name)
+    ext = filename.lower().split(".")[-1]
+
+    if ext not in {"txt", "pdf"}:
+        return redirect("dashboard")
+
+    os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)
+
+    destination = os.path.join(settings.CURRICULUM_ROOT, filename)
+
+    with open(destination, "wb+") as dest:
+        for chunk in file.chunks():
+            dest.write(chunk)
+
+    return redirect("dashboard")
+    
