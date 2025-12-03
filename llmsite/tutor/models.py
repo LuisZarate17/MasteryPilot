@@ -54,21 +54,29 @@ class QuizAnswer(models.Model):
 
 from django.contrib.auth.models import User
 
+
+
+class TeacherProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    
+    def __str__(self):
+        return self.user.username
+    
 class StudentProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     school = models.CharField(max_length=200, blank=True)
     grade = models.CharField(max_length=50, blank=True)
     classes = models.TextField(blank=True)  # comma-separated list
+    teacher = models.ForeignKey(
+        TeacherProfile,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="students",
+    )
 
     def __str__(self):
         return self.user.username
 
-class TeacherProfile(models.Model):
-    user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    students = []
-    
-    def __str__(self):
-        return self.user.username
-    
 class AdminProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
