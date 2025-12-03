@@ -37,6 +37,7 @@ def dashboard_page(request):
         "teachers": teachers,
         "admins": admins,
         "students": students,
+        "is_admin": is_admin(request.user),
     }
 
     return render(request, "dashboard_admin_mentor.html", context)
@@ -90,6 +91,31 @@ def account_create(request):
         )
     else:
         user.delete()
+
+    return redirect("dashboard")
+
+@require_http_methods(["POST"])
+@login_required
+@user_passes_test(is_admin)
+def account_delete(request):
+    User = get_user_model()
+
+    user_id = request.POST.get("user_id")
+    role = (request.POST.get("role") or "").strip()
+
+    if not user_id:
+        return redirect("dashboard")
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return redirect("dashboard")
+
+    # Do not let an admin delete themselves
+    if user == request.user:
+        return redirect("dashboard")
+
+    user.delete()
 
     return redirect("dashboard")
 
