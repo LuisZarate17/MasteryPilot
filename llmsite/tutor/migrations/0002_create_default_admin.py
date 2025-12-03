@@ -17,6 +17,7 @@ def create_admin_account(apps, schema_editor):
             password=password,
         )
 
+
 # python manage.py migrate
 class Migration(migrations.Migration):
 

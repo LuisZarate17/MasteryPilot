@@ -4,7 +4,7 @@ from django.shortcuts import render
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth import login
+from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect
 from .forms import SignupForm
 import json
@@ -12,7 +12,8 @@ import json
 from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
 from .models import Session, Chat as DBChat
-from .utils import is_teacher_or_admin
+from .utils import is_teacher_or_admin, is_admin
+from .models import TeacherProfile, AdminProfile, StudentProfile
 
 # in-memory registry for prototype use
 CHAT_REGISTRY = {}
@@ -28,7 +29,17 @@ def chat_page(request):
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def dashboard_page(request):
-    return render(request, "dashboard_admin_mentor.html")
+    teachers = TeacherProfile.objects.select_related("user").all()
+    admins = AdminProfile.objects.select_related("user").all()
+    students = StudentProfile.objects.select_related("user").all()
+
+    context = {
+        "teachers": teachers,
+        "admins": admins,
+        "students": students,
+    }
+
+    return render(request, "dashboard_admin_mentor.html", context)
 
 def signup(request):
     if request.method == "POST":
@@ -41,6 +52,46 @@ def signup(request):
         form = SignupForm()
     return render(request, "signup.html", {"form": form})
 
+@require_http_methods(["POST"])
+@login_required
+@user_passes_test(is_admin)
+def account_create(request):
+    User = get_user_model()
+
+    role = (request.POST.get("role") or "").strip()
+    username = (request.POST.get("username") or "").strip()
+    email = (request.POST.get("email") or "").strip()
+    password = request.POST.get("password") or ""
+
+    grade = (request.POST.get("grade") or "").strip()
+    classes = (request.POST.get("classes") or "").strip()
+
+    if not role or not username or not password:
+        return redirect("dashboard")
+    
+    if User.objects.filter(username=username).exists():
+        return redirect("dashboard")
+    
+    user = User.objects.create_user(
+        username=username,
+        email=email,
+        password=password,
+    )
+
+    if role == "teacher":
+        TeacherProfile.objects.create(user=user)
+    elif role == "admin":
+        AdminProfile.objects.create(user=user)
+    elif role == "student":
+        StudentProfile.objects.create(
+            user=user,
+            grade=grade,
+            classes=classes,
+        )
+    else:
+        user.delete()
+
+    return redirect("dashboard")
 
 @csrf_exempt
 @require_http_methods(["POST"])

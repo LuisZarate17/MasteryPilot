@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import chat_page, api_init, api_chat, api_reset, api_new_session, signup, dashboard_page
+from .views import chat_page, api_init, api_chat, api_reset, api_new_session, signup, dashboard_page, account_create
 
 urlpatterns = [
     path("", chat_page, name="chat_page"),
@@ -10,4 +10,5 @@ urlpatterns = [
     path("api/session/new/", api_new_session, name="api_new_session"),
     path("api/chat/", api_chat, name="api_chat"),
     path("api/reset/", api_reset, name="api_reset"),
+    path("dashboard/create_account/", account_create, name="account_create"),
 ]
