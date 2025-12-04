@@ -34,7 +34,16 @@
       </a>
       <div class="flex items-center gap-6 text-sm">
         <a href="/" class="hover:text-brand-700">Home</a>
-        <a href="/login/" class="hover:text-brand-700">Login</a>
+        {% if user.is_authenticated %}
+          <span class="text-gray-500">Hi, {{ user.username }}</span>
+          <form action="/logout/" method="post" class="inline">
+            {% csrf_token %}
+            <button type="submit" class="hover:text-brand-700">Logout</button>
+          </form>
+        {% else %}
+          <a href="/login/" class="hover:text-brand-700">Login</a>
+          <a href="/signup/" class="hover:text-brand-700">Signup</a>
+        {% endif %}
       </div>
     </div>
   </nav>
