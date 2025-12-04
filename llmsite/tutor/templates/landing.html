@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome - AI Tutor{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+  <!-- Welcome Header -->
+  <div class="mb-8">
+    <h1 class="text-4xl font-bold text-gray-900 mb-2">
+      Welcome, {{ user.first_name|default:user.username }}!
+    </h1>
+    <p class="text-lg text-gray-600">
+      Ready to continue your learning journey?
+    </p>
+  </div>
+
+  <!-- Progress Summary Widget -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-xl font-semibold text-gray-900">Your Progress</h2>
+      <a href="{% url 'progress_detail' %}" 
+         class="text-sm text-brand-600 hover:text-brand-700 font-medium">
+        View detailed insights →
+      </a>
+    </div>
+
+    {% if has_activity %}
+      <!-- Overall Progress Bar -->
+      <div class="mb-6">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm font-medium text-gray-700">Overall Progress</span>
+          <span class="text-sm font-bold text-brand-600">{{ progress.overall_completion_percent|floatformat:0 }}%</span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+          <div class="bg-gradient-to-r from-brand-500 to-brand-600 h-3 rounded-full transition-all duration-500"
+               style="width: {{ progress.overall_completion_percent }}%">
+          </div>
+        </div>
+      </div>
+
+      <!-- Progress Details Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+        <!-- Current Module -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="text-xs font-medium text-gray-500 uppercase mb-1">Current Topic</div>
+          <div class="text-sm font-semibold text-gray-900 truncate">
+            {{ progress.current_module|default:"No active topic" }}
+          </div>
+        </div>
+
+        <!-- Quiz Average -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="text-xs font-medium text-gray-500 uppercase mb-1">Quiz Average</div>
+          <div class="text-sm font-semibold text-gray-900">
+            {% if progress.quiz_average %}
+              {{ progress.quiz_average|floatformat:1 }}%
+            {% else %}
+              No quizzes yet
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Activity Streak -->
+        <div class="bg-gray-50 rounded-lg p-4">
+          <div class="text-xs font-medium text-gray-500 uppercase mb-1">Activity Streak</div>
+          <div class="text-sm font-semibold text-gray-900">
+            {% if progress.activity_streak > 0 %}
+              🔥 {{ progress.activity_streak }} day{{ progress.activity_streak|pluralize }}
+            {% else %}
+              Start today!
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="flex items-center gap-6 text-sm text-gray-600 pb-4 border-b border-gray-200">
+        <div>
+          <span class="font-medium text-gray-900">{{ progress.total_sessions }}</span> session{{ progress.total_sessions|pluralize }}
+        </div>
+        <div>
+          <span class="font-medium text-gray-900">{{ progress.total_quizzes }}</span> quiz{{ progress.total_quizzes|pluralize:"zes" }}
+        </div>
+        <div>
+          <span class="font-medium text-gray-900">{{ progress.total_messages }}</span> message{{ progress.total_messages|pluralize }}
+        </div>
+        {% if progress.last_activity %}
+        <div class="ml-auto text-xs">
+          Last active: {{ progress.last_activity|date:"M j, Y g:i A" }}
+        </div>
+        {% endif %}
+      </div>
+
+    {% else %}
+      <!-- Empty State -->
+      <div class="text-center py-8">
+        <div class="text-6xl mb-4">🎯</div>
+        <h3 class="text-lg font-semibold text-gray-900 mb-2">
+          No progress yet
+        </h3>
+        <p class="text-gray-600 mb-4">
+          Start your first chat session to begin tracking your learning journey!
+        </p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Action CTAs -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <!-- Start New Chat CTA -->
+    <a href="{% url 'chat' %}" 
+       class="group bg-brand-600 hover:bg-brand-700 text-white rounded-lg p-6 shadow-sm transition-all duration-200 hover:shadow-md">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xl font-semibold">Start a New Chat</h3>
+        <span class="text-2xl group-hover:translate-x-1 transition-transform">💬</span>
+      </div>
+      <p class="text-brand-100">
+        Continue learning with AI-powered tutoring
+      </p>
+    </a>
+
+    <!-- View Progress CTA -->
+    <a href="{% url 'progress_detail' %}" 
+       class="group bg-white hover:bg-gray-50 text-gray-900 rounded-lg p-6 shadow-sm border border-gray-200 transition-all duration-200 hover:shadow-md">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="text-xl font-semibold">View Detailed Progress</h3>
+        <span class="text-2xl group-hover:translate-x-1 transition-transform">📊</span>
+      </div>
+      <p class="text-gray-600">
+        See charts, history, and insights
+      </p>
+    </a>
+  </div>
+
+  <!-- Quick Tips (Optional) -->
+  {% if not has_activity %}
+  <div class="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-6">
+    <h3 class="text-lg font-semibold text-blue-900 mb-3">Getting Started</h3>
+    <ul class="space-y-2 text-sm text-blue-800">
+      <li class="flex items-start gap-2">
+        <span class="text-blue-600 mt-0.5">•</span>
+        <span>Click "Start a New Chat" to begin a conversation with your AI tutor</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <span class="text-blue-600 mt-0.5">•</span>
+        <span>Complete quizzes to test your knowledge and track progress</span>
+      </li>
+      <li class="flex items-start gap-2">
+        <span class="text-blue-600 mt-0.5">•</span>
+        <span>Build your activity streak by learning consistently each day</span>
+      </li>
+    </ul>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Loading State (for JS fetch on future enhancements) -->
+<template id="progress-skeleton">
+  <div class="animate-pulse">
+    <div class="h-4 bg-gray-200 rounded w-32 mb-2"></div>
+    <div class="h-3 bg-gray-200 rounded-full mb-6"></div>
+    <div class="grid grid-cols-3 gap-4">
+      <div class="h-20 bg-gray-200 rounded-lg"></div>
+      <div class="h-20 bg-gray-200 rounded-lg"></div>
+      <div class="h-20 bg-gray-200 rounded-lg"></div>
+    </div>
+  </div>
+</template>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Optional: Add interactivity for progress bar animation on load
+  document.addEventListener('DOMContentLoaded', function() {
+    const progressBar = document.querySelector('[style*="width"]');
+    if (progressBar) {
+      // Animate from 0 to target width
+      const targetWidth = progressBar.style.width;
+      progressBar.style.width = '0%';
+      setTimeout(() => {
+        progressBar.style.width = targetWidth;
+      }, 100);
+    }
+  });
+</script>
+{% endblock %}

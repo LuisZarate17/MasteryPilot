@@ -14,8 +14,8 @@ import os
 
 from httpx import request
 from languagemodel import StartAIChat, Initialization, SendMessage
-from .models import Session, Chat as DBChat
-from .utils import is_teacher_or_admin, is_admin
+from .models import Session, Chat as DBChat, StudentProgress
+from .utils import is_teacher_or_admin, is_admin, calculate_student_progress
 from .models import TeacherProfile, AdminProfile, StudentProfile
 
 # in-memory registry for prototype use
@@ -25,6 +25,31 @@ def _session_id(request):
     if not request.session.session_key:
         request.session.save()
     return request.session.session_key
+
+@login_required
+def landing_page(request):
+    """
+    Authenticated landing page for students.
+    Shows welcome message, progress summary widget, and CTAs.
+    Teachers/admins are redirected to dashboard.
+    """
+    if is_teacher_or_admin(request.user):
+        return redirect("dashboard")
+    
+    # Get or calculate progress for the current user
+    try:
+        progress = StudentProgress.objects.get(user=request.user)
+    except StudentProgress.DoesNotExist:
+        # First time user - calculate initial progress
+        calculate_student_progress(request.user)
+        progress = StudentProgress.objects.get(user=request.user)
+    
+    context = {
+        'progress': progress,
+        'has_activity': progress.total_sessions > 0 or progress.total_quizzes > 0,
+    }
+    
+    return render(request, "landing.html", context)
 
 def chat_page(request):
     if is_teacher_or_admin(request.user):
@@ -218,6 +243,13 @@ def api_new_session(request):
     title = (data.get("title") or "New session").strip() or "New session"
     session = Session.objects.create(owner=request.user, title=title)
 
+    # Refresh progress on new session creation
+    try:
+        calculate_student_progress(request.user)
+    except Exception as e:
+        # Don't fail session creation if progress calc fails
+        print(f"Progress calculation error: {e}")
+
     return JsonResponse({
         "ok": True,
         "id": str(session.id),
@@ -327,6 +359,23 @@ def api_chat(request):
 
     # call SendMessage on the stored chat
     reply = SendMessage(chat, msg) or ""
+    
+    # Try to persist the user message and assistant reply to database
+    try:
+        session_id = request.session.get("session_id")
+        if session_id:
+            session = Session.objects.get(id=session_id, owner=request.user)
+            DBChat.objects.create(session=session, role="user", message=msg)
+            DBChat.objects.create(session=session, role="assistant", message=reply)
+            
+            # Refresh progress periodically (every 5th message to reduce overhead)
+            user_message_count = DBChat.objects.filter(session=session, role="user").count()
+            if user_message_count % 5 == 0:
+                calculate_student_progress(request.user)
+    except Exception as e:
+        # Don't fail chat if persistence fails
+        print(f"Chat persistence or progress calc error: {e}")
+    
     return JsonResponse({"ok": True, "model_text": reply})
 
 @csrf_exempt
@@ -335,6 +384,124 @@ def api_reset(request):
     sid = _session_id(request)
     CHAT_REGISTRY.pop(sid, None)
     return JsonResponse({"ok": True})
+
+
+@login_required
+@require_http_methods(["GET"])
+def progress_summary(request):
+    """
+    API endpoint to fetch student progress summary.
+    Returns: overall completion %, current module, last activity, streak, and next step.
+    """
+    user = request.user
+    
+    # Recalculate progress for current user
+    metrics = calculate_student_progress(user)
+    
+    # Determine next recommended step
+    next_step = ""
+    if metrics['total_sessions'] == 0:
+        next_step = "Start your first chat session"
+    elif metrics['total_quizzes'] == 0:
+        next_step = "Complete your first quiz"
+    elif metrics['quiz_average'] and metrics['quiz_average'] < 70:
+        next_step = "Review topics and improve quiz scores"
+    else:
+        next_step = "Continue learning with new topics"
+    
+    return JsonResponse({
+        'ok': True,
+        'overall_completion_percent': metrics['overall_completion_percent'],
+        'current_module': metrics['current_module'],
+        'last_activity': metrics['last_activity'],
+        'activity_streak': metrics['activity_streak'],
+        'next_step': next_step,
+        'total_sessions': metrics['total_sessions'],
+        'total_quizzes': metrics['total_quizzes'],
+        'total_messages': metrics['total_messages'],
+        'quiz_average': metrics['quiz_average'],
+    })
+
+
+@login_required
+def progress_detail(request):
+    """
+    Full progress dashboard with charts, history, and detailed metrics.
+    For students viewing their own progress or teachers viewing student progress.
+    """
+    # Check if viewing as teacher/admin with student_id parameter
+    student_id = request.GET.get('student_id')
+    
+    if student_id and is_teacher_or_admin(request.user):
+        # Teachers/admins can view student progress
+        try:
+            User = get_user_model()
+            student_user = User.objects.get(id=student_id)
+            
+            # Verify teacher has access to this student
+            if not is_admin(request.user):
+                teacher_profile = TeacherProfile.objects.get(user=request.user)
+                student_profile = StudentProfile.objects.get(user=student_user)
+                if student_profile.teacher != teacher_profile:
+                    return JsonResponse({'error': 'Access denied'}, status=403)
+            
+            target_user = student_user
+        except (User.DoesNotExist, TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
+            return JsonResponse({'error': 'Student not found'}, status=404)
+    else:
+        # Students view their own progress
+        target_user = request.user
+    
+    # Recalculate progress
+    metrics = calculate_student_progress(target_user)
+    
+    # Get progress record for historical data
+    try:
+        progress = StudentProgress.objects.get(user=target_user)
+    except StudentProgress.DoesNotExist:
+        progress = None
+    
+    # Get session history with quiz data
+    sessions = Session.objects.filter(owner=target_user).order_by('-created_at')[:20]
+    session_history = []
+    
+    for session in sessions:
+        quizzes = session.quizzes.filter(status='graded')
+        quiz_count = quizzes.count()
+        
+        # Calculate session quiz average
+        session_quiz_avg = None
+        if quiz_count > 0:
+            quiz_scores = []
+            for quiz in quizzes:
+                quiz_answer = quiz.answers.first()
+                if quiz_answer and quiz_answer.graded_json:
+                    correct = sum(1 for item in quiz_answer.graded_json.values() 
+                                if isinstance(item, dict) and item.get('isCorrect'))
+                    total = len(quiz_answer.graded_json)
+                    if total > 0:
+                        quiz_scores.append((correct / total) * 100)
+            
+            if quiz_scores:
+                session_quiz_avg = sum(quiz_scores) / len(quiz_scores)
+        
+        session_history.append({
+            'id': str(session.id),
+            'title': session.title,
+            'created_at': session.created_at.isoformat(),
+            'quiz_count': quiz_count,
+            'quiz_average': round(session_quiz_avg, 2) if session_quiz_avg else None,
+        })
+    
+    context = {
+        'target_user': target_user,
+        'metrics': metrics,
+        'progress': progress,
+        'session_history': session_history,
+        'is_viewing_other': student_id is not None,
+    }
+    
+    return render(request, 'progress_detail.html', context)
 
 
 @login_required
