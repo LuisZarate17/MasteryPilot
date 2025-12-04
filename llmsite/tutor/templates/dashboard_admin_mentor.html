@@ -35,6 +35,7 @@
             Intervention
           </button>
         </li>
+        {% if is_admin %}
         <li>
           <button
             class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
@@ -42,6 +43,7 @@
             Accounts
           </button>
         </li>
+        {% endif %}
         <li>
           <button
             class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
@@ -258,6 +260,7 @@
         </div>
       </div>
 
+      {% if is_admin %}
       <!-- Accounts section -->
       <div id="section-accounts" class="space-y-8">
         <!-- Teachers -->
@@ -452,6 +455,7 @@
           </div>
         </div>
       </div>
+      {% endif %}
     </div>
   </section>
 </div>
