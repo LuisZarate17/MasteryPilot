@@ -1,11 +1,11 @@
 from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_http_methods, require_GET
 from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login, get_user_model
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, get_object_or_404
 from django.conf import settings
 from django.utils.text import get_valid_filename
 from .forms import SignupForm, UploadRagForm
@@ -211,6 +211,29 @@ def student_edit(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@login_required
+def api_new_session(request):
+    """Create a new Session for the authenticated user and return its metadata."""
+    try:
+        data = json.loads(request.body.decode("utf-8")) if request.body else {}
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+
+    title = (data.get("title") or "New session").strip() or "New session"
+    session = Session.objects.create(owner=request.user, title=title)
+
+    # store the session id in the user's django session to aid backwards compatibility
+    request.session["session_id"] = str(session.id)
+
+    return JsonResponse({
+        "ok": True,
+        "id": str(session.id),
+        "title": session.title,
+        "createdAt": session.created_at.isoformat(),
+    })
+
+@csrf_exempt
+@require_http_methods(["POST"])
 def api_init(request):
     #try:
         #data = json.loads(request.body.decode("utf-8"))
@@ -291,3 +314,54 @@ def upload_curriculum(request):
             dest.write(chunk)
 
     return redirect("dashboard")
+
+@login_required
+def api_list_sessions(request):
+    """Return all sessions for the current user."""
+    sessions = Session.objects.filter(owner=request.user).order_by("-created_at")
+    data = [
+        {"id": str(s.id), "title": s.title, "created_at": s.created_at.isoformat()}
+        for s in sessions
+    ]
+    return JsonResponse({"sessions": data})
+
+
+@login_required
+@require_GET
+def api_session_messages(request, session_id):
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return HttpResponseBadRequest("Session not found or not owned by user")
+
+    chats = DBChat.objects.filter(session=session)
+    messages = [{"role": c.role, "text": c.message} for c in chats]
+
+    return JsonResponse({"ok": True, "messages": messages})
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+@login_required
+def api_delete_session(request, session_id):
+    session = get_object_or_404(Session, id=session_id, owner=request.user)
+    # remove in-memory chat if present
+    CHAT_REGISTRY.pop(str(session_id), None)
+    session.delete()
+    return JsonResponse({"ok": True, "status": "deleted"})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def api_rename_session(request, session_id):
+    try:
+        data = json.loads(request.body.decode("utf-8")) if request.body else {}
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+    new_title = (data.get("title") or "").strip()
+    if not new_title:
+        return HttpResponseBadRequest("title is required")
+    session = get_object_or_404(Session, id=session_id, owner=request.user)
+    session.title = new_title
+    session.save(update_fields=["title"])
+    return JsonResponse({"ok": True, "id": str(session.id), "title": session.title})
