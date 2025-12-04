@@ -21,7 +21,7 @@ def create_admin_account(apps, schema_editor):
     try:
         user = User.objects.get(username=username)
     except User.DoesNotExist:
-        return  # admin user was never created
+        return 
 
     AdminProfile.objects.get_or_create(user=user)
 
