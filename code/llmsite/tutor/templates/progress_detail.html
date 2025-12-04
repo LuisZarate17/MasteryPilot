@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+
+{% block title %}Progress Details - AI Tutor{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+  <!-- Header -->
+  <div class="mb-8">
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-3xl font-bold text-gray-900 mb-2">
+          {% if is_viewing_other %}
+            Progress for {{ target_user.get_full_name|default:target_user.username }}
+          {% else %}
+            Your Progress Dashboard
+          {% endif %}
+        </h1>
+        <p class="text-gray-600">Detailed insights and learning history</p>
+      </div>
+      <a href="{% if is_viewing_other %}{% url 'dashboard' %}{% else %}{% url 'landing' %}{% endif %}" 
+         class="text-sm text-brand-600 hover:text-brand-700 font-medium">
+        ← Back
+      </a>
+    </div>
+  </div>
+
+  <!-- Key Metrics Cards -->
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <!-- Overall Progress -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div class="text-sm font-medium text-gray-500 mb-1">Overall Progress</div>
+      <div class="text-3xl font-bold text-brand-600">
+        {{ metrics.overall_completion_percent|floatformat:0 }}%
+      </div>
+      <div class="mt-2 w-full bg-gray-200 rounded-full h-2">
+        <div class="bg-brand-600 h-2 rounded-full" 
+             style="width: {{ metrics.overall_completion_percent }}%"></div>
+      </div>
+    </div>
+
+    <!-- Quiz Average -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div class="text-sm font-medium text-gray-500 mb-1">Quiz Average</div>
+      <div class="text-3xl font-bold text-gray-900">
+        {% if metrics.quiz_average %}
+          {{ metrics.quiz_average|floatformat:1 }}%
+        {% else %}
+          —
+        {% endif %}
+      </div>
+      <div class="mt-2 text-xs text-gray-500">
+        {{ metrics.total_quizzes }} quiz{{ metrics.total_quizzes|pluralize:"zes" }} completed
+      </div>
+    </div>
+
+    <!-- Activity Streak -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div class="text-sm font-medium text-gray-500 mb-1">Activity Streak</div>
+      <div class="text-3xl font-bold text-gray-900">
+        {% if metrics.activity_streak > 0 %}
+          🔥 {{ metrics.activity_streak }}
+        {% else %}
+          0
+        {% endif %}
+      </div>
+      <div class="mt-2 text-xs text-gray-500">
+        day{{ metrics.activity_streak|pluralize }} in a row
+      </div>
+    </div>
+
+    <!-- Total Sessions -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <div class="text-sm font-medium text-gray-500 mb-1">Total Sessions</div>
+      <div class="text-3xl font-bold text-gray-900">{{ metrics.total_sessions }}</div>
+      <div class="mt-2 text-xs text-gray-500">
+        {{ metrics.total_messages }} messages sent
+      </div>
+    </div>
+  </div>
+
+  <!-- Current Status -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-8">
+    <h2 class="text-lg font-semibold text-gray-900 mb-4">Current Status</h2>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div>
+        <div class="text-sm font-medium text-gray-500 mb-2">Current Topic</div>
+        <div class="text-base text-gray-900">
+          {{ metrics.current_module|default:"No active topic" }}
+        </div>
+      </div>
+      <div>
+        <div class="text-sm font-medium text-gray-500 mb-2">Last Activity</div>
+        <div class="text-base text-gray-900">
+          {% if metrics.last_activity %}
+            {{ metrics.last_activity|date:"F j, Y g:i A" }}
+          {% else %}
+            No activity yet
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Session History -->
+  <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+    <h2 class="text-lg font-semibold text-gray-900 mb-4">Recent Session History</h2>
+    
+    {% if session_history %}
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead>
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Session Title
+              </th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Date
+              </th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Quizzes
+              </th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Quiz Avg
+              </th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-200">
+            {% for session in session_history %}
+            <tr class="hover:bg-gray-50">
+              <td class="px-4 py-3 text-sm text-gray-900">
+                {{ session.title }}
+              </td>
+              <td class="px-4 py-3 text-sm text-gray-500">
+                {{ session.created_at|date:"M j, Y" }}
+              </td>
+              <td class="px-4 py-3 text-sm text-gray-900">
+                {{ session.quiz_count }}
+              </td>
+              <td class="px-4 py-3 text-sm">
+                {% if session.quiz_average %}
+                  <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
+                        {% if session.quiz_average >= 80 %}bg-green-100 text-green-800
+                        {% elif session.quiz_average >= 60 %}bg-yellow-100 text-yellow-800
+                        {% else %}bg-red-100 text-red-800{% endif %}">
+                    {{ session.quiz_average|floatformat:0 }}%
+                  </span>
+                {% else %}
+                  <span class="text-gray-400">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="text-center py-8 text-gray-500">
+        <div class="text-4xl mb-2">📚</div>
+        <p>No session history available yet</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Future Enhancement: Charts Section -->
+  <div class="mt-8 bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 text-center">
+    <div class="text-gray-400 text-sm">
+      📊 Interactive charts and graphs coming soon
+    </div>
+  </div>
+
+  {% if not is_viewing_other %}
+  <!-- Action Button -->
+  <div class="mt-8 flex justify-center">
+    <a href="{% url 'chat' %}" 
+       class="inline-flex items-center px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg shadow-sm transition-colors">
+      Continue Learning →
+    </a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

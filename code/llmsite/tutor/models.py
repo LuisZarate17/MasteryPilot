@@ -80,3 +80,64 @@ class StudentProfile(models.Model):
 
 class AdminProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+
+class StudentProgress(models.Model):
+    """
+    Caches computed progress metrics for students.
+    Updated on quiz submissions, session completions, and via backfill jobs.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="progress",
+        db_index=True
+    )
+    overall_completion_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
+        help_text="Weighted completion based on quiz scores and session activity"
+    )
+    current_module = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Current topic/module - inferred from most recent session title"
+    )
+    quiz_average = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Average quiz score across all graded quizzes"
+    )
+    activity_streak = models.IntegerField(
+        default=0,
+        help_text="Consecutive days with at least one activity"
+    )
+    last_activity = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of most recent chat or quiz activity"
+    )
+    total_sessions = models.IntegerField(
+        default=0,
+        help_text="Total number of chat sessions created"
+    )
+    total_quizzes = models.IntegerField(
+        default=0,
+        help_text="Total number of quizzes completed"
+    )
+    total_messages = models.IntegerField(
+        default=0,
+        help_text="Total number of user messages sent"
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'updated_at']),
+        ]
+        verbose_name_plural = "Student Progress"
+
+    def __str__(self):
+        return f"Progress for {self.user.username}: {self.overall_completion_percent}%"

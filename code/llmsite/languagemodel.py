@@ -4,7 +4,7 @@ import os
 
 # Import RAG helper functions
 from rag import load_txt_files, load_pdf_files, retrieve
-CURRICULUM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "curriculum") #Path
+CURRICULUM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "llmsite/curriculum") #Path
 MAX_CONTEXT = 130000
 
 INITIALIZATION_PROMPT_1 = """
