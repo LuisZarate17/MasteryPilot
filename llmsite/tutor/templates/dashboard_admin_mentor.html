@@ -16,7 +16,7 @@
       <ul id="dashboardNav" class="space-y-1 text-sm">
         <li>
           <button
-            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
+            class="w-full text-left p-2 rounded-lg bg-gray-100 font-medium text-gray-900"
             data-section="students">
             Students
           </button>
@@ -37,7 +37,7 @@
         </li>
         <li>
           <button
-            class="w-full text-left p-2 rounded-lg bg-gray-100 font-medium text-gray-900"
+            class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
             data-section="accounts">
             Accounts
           </button>
@@ -68,6 +68,63 @@
       <div id="section-default" class="hidden h-full flex items-center justify-center text-gray-400 text-sm">
         <p>Select an item from the sidebar to view details.</p>
       </div>
+
+      <!-- Students section -->
+      <div id="section-students" class="space-y-6 hidden"><div>
+          <div class="border rounded-xl overflow-hidden">
+            <table class="min-w-full text-sm">
+              <thead class="bg-gray-50 text-gray-600">
+                <tr>
+                  <th class="px-4 py-2 text-left font-medium">Name</th>
+                  <th class="px-4 py-2 text-left font-medium">Email</th>
+                  <th class="px-4 py-2 text-left font-medium">Grade</th>
+                  <th class="px-4 py-2 text-right font-medium">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100">
+                {% for s in students %}
+                  <tr>
+                    <td class="px-4 py-2">
+                      {{ s.user.get_full_name|default:s.user.username }}
+                    </td>
+                    <td class="px-4 py-2 text-gray-600">
+                      {{ s.user.email }}
+                    </td>
+                    <td class="px-4 py-2 text-gray-600">
+                      {{ s.grade }}
+                    </td>
+                    <td class="px-4 py-2 text-right space-x-2">
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 chat-history-btn"
+                        data-role="student"
+                        data-student-id="{{ s.id }}"
+                        data-classes="{{ s.classes|default_if_none:''|escapejs }}"
+                        data-teacher-id="{{ s.teacher.id|default:'' }}">
+                        Chat History
+                      </button>
+                      <button
+                        type="button"
+                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 view-progress-btn"
+                        data-role="student"
+                        data-user-id="{{ s.user.id }}">
+                        View Progress
+                      </button>
+                    </td>
+                  </tr>
+                {% empty %}
+                  <tr>
+                    <td colspan="4" class="px-4 py-3 text-center text-gray-400">
+                      No students found.
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
       <!-- Curriculum section -->
       <div id="section-curriculum" class="space-y-6 hidden">
         <!-- Upload form -->
@@ -571,6 +628,7 @@
   function showSection(sectionKey) {
     const sections = {
       "default": document.getElementById("section-default"),
+      "students": document.getElementById("section-students"),
       "curriculum": document.getElementById("section-curriculum"),
       "accounts": document.getElementById("section-accounts"),
     };
@@ -587,7 +645,7 @@
       subtitle = "Manage teacher, admin, and student accounts.";
     } else if (sectionKey === "students") {
       title = "Students";
-      subtitle = "Student view is not set up yet.";
+      subtitle = "View students in your class.";
     } else if (sectionKey === "curriculum") {
       title = "Curriculum";
       subtitle = "Add and remove documents to be used by the tutor in sessions.";
@@ -627,8 +685,8 @@
     });
   }
 
-  // Default to Accounts view
-  showSection("accounts");
+  // Default to students view
+  showSection("students");
 
   // Account modal logic
   const accountModal = document.getElementById("accountModal");

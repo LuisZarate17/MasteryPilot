@@ -27,7 +27,8 @@ def _session_id(request):
     return request.session.session_key
 
 def chat_page(request):
-    #TODO: make teachers and admins redirect to dashboard
+    if is_teacher_or_admin(request.user):
+        return redirect("dashboard")
     return render(request, "chat.html")
 
 @login_required
