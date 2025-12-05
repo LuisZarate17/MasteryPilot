@@ -1,4 +1,6 @@
 from django.urls import path
+from . import views
+
 from .views import (
     chat_page, api_new_session, api_init, api_chat, api_reset, api_new_session, signup, 
     dashboard_page, account_create, account_delete, student_edit, 
@@ -26,6 +28,8 @@ urlpatterns = [
     path("api/sessions/", api_list_sessions, name="api_list_sessions"),
     path("dashboard/curriculum/view/<str:filename>", curriculum_view, name="curriculum_view"),
     path("api/session/<uuid:session_id>/messages/", api_session_messages, name="api_session_messages"),
+    path('api/session/<str:session_id>/select/', views.api_select_session, name='api_select_session'),
+    path('api/session/<str:session_id>/init/', views.api_session_init, name='api_session_init'),
     path("api/session/<uuid:session_id>/delete/", api_delete_session, name="api_delete_session"),
     path("api/session/<uuid:session_id>/rename/", api_rename_session, name="api_rename_session")
 ]
