@@ -9,7 +9,10 @@ class TutorConfig(AppConfig):
         from django.conf import settings
         from . import globals  # a small module to hold the variables
 
-        print("Initializing LLM in Django startup…")
-        model, tokenizer = InitModel()
-        globals.loaded_model = model
-        globals.loaded_tokenizer = tokenizer
+        if settings.GEMINI_ENABLED:
+            print("[ -- TEST MODE -- ] Initializing Gemini for testing")
+        else:
+            print("Initializing LLM in Django startup…")
+            model, tokenizer = InitModel()
+            globals.loaded_model = model
+            globals.loaded_tokenizer = tokenizer

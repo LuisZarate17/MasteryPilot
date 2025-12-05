@@ -20,7 +20,8 @@ LOGOUT_REDIRECT_URL = "/"
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'noreply@aitutor.local'
 
-
+# Enable Gemini (TESTING ONLY)
+GEMINI_ENABLED = True
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

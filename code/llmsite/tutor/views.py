@@ -13,6 +13,7 @@ import json
 import os
 
 from languagemodel import InitModel, StartChat, SendMessage
+from languagemodel_legacy import *
 from httpx import request
 from .models import Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress
@@ -22,7 +23,13 @@ from tutor.globals import GetModelAndTokenizer
 # in-memory registry for prototype use
 CHAT_REGISTRY = {}
 
-model, tokenizer = GetModelAndTokenizer()
+model = None
+tokenizer = None
+gemini = None
+if not settings.GEMINI_ENABLED:
+    model, tokenizer = GetModelAndTokenizer()
+else:
+    gemini = StartAIChat()
 
 def _session_id(request):
     if not request.session.session_key:
@@ -277,15 +284,27 @@ def api_init(request):
 
     # Initialize the chat.
     # TODO: Retreive chats and RAG from database.
-    chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+    if not settings.GEMINI_ENABLED:
+        chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
 
-    # store the live chat object for this user session
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
+        # store the live chat object for this user session
+        sid = _session_id(request)
+        CHAT_REGISTRY[sid] = messages
 
-    model_reply = chat.split("<|assistant|>")[-1].strip()
+        model_reply = chat.split("<|assistant|>")[-1].strip()
 
-    return JsonResponse({"ok": True, "model_text": model_reply})
+        return JsonResponse({"ok": True, "model_text": model_reply})
+    else:
+        gemini = StartAIChat()
+        response = Initialization(gemini, name, school, grade, classes)
+
+        # store the live chat object for this user session
+        sid = _session_id(request)
+        CHAT_REGISTRY[sid] = "<|assistant|>" + response
+
+
+        return JsonResponse({"ok": True, "model_text": response})
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -303,13 +322,17 @@ def api_chat(request):
     chat = CHAT_REGISTRY.get(sid)
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
+    model_reply = None
+    if not settings.GEMINI_ENABLED: 
+        # call SendMessage on the stored chat
+        reply, messages = SendMessage(model, tokenizer, chat, msg)
 
-    # call SendMessage on the stored chat
-    reply, messages = SendMessage(model, tokenizer, chat, msg)
+        CHAT_REGISTRY[sid] = messages
+        model_reply = reply.split("<|assistant|>")[-1].strip()
+    else:
+        model_reply = SendMessage(gemini, msg)
+        CHAT_REGISTRY[sid] = CHAT_REGISTRY[sid] + "<|assistant|>" + msg
 
-    CHAT_REGISTRY[sid] = messages
-    model_reply = reply.split("<|assistant|>")[-1].strip()
-    
     # Try to persist the user message and assistant reply to database
     try:
         session_id = request.session.get("session_id")
