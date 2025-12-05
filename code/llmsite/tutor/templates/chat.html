@@ -361,38 +361,41 @@
   }
 
 // New Session button handler
-  document.getElementById("newSession").addEventListener("click", async () => {
-    try {
-        // Create a new session with default title
-        const res = await fetch("{% url 'api_new_session' %}", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({})  // no title needed, backend will default
-        });
-        if (!res.ok) throw new Error(await res.text());
-        const data = await res.json();
-        currentSessionId = data.id;
+document.getElementById("newSession").addEventListener("click", async () => {
+  try {
+    // Create a new session in DB (backend also returns the first LLM message)
+    const res = await fetch("{% url 'api_new_session' %}", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({}) // backend will default title
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    currentSessionId = data.id;
 
-        // Add session to sidebar
-        const li = document.createElement('li');
-        li.className = 'p-2 rounded-lg hover:bg-gray-50 cursor-pointer';
-        li.dataset.sessionId = data.id;
-        li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
-        li.addEventListener("click", () => loadSessionMessages(data.id));
+    // Add session to sidebar
+    const li = document.createElement('li');
+    li.className = 'p-2 rounded-lg hover:bg-gray-50 cursor-pointer';
+    li.dataset.sessionId = data.id;
+    li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
+    li.addEventListener("click", () => loadSessionMessages(data.id));
 
-        const sessionList = document.getElementById('sessionList');
-        sessionList.prepend(li);
+    const sessionList = document.getElementById('sessionList');
+    sessionList.prepend(li);
 
-        // Clear chat log and show simple welcome
-        chatLog.innerHTML = '';
-        appendMessage('model', `Session created: ${data.title}`);
+    // Replace chat log with initial assistant message returned by api_new_session
+    chatLog.innerHTML = '';
+    const initial = data.model_text || `Session created: ${data.title}`;
+    appendMessage('model', initial);
 
-        // Don't call api_init yet — wait until user sends first message
-    } catch (err) {
-        alert('Create session failed: ' + err.message);
-    }
+    // NOTE: do NOT call api_init here for new session (we already got the assistant reply)
+  } catch (err) {
+    alert('Create session failed: ' + err.message);
+  }
 });
+
+
 
 
 
@@ -494,12 +497,31 @@ async function loadSessions() {
 
 
 // loadSessionMessages fetches and displays messages for a given session
+// loadSessionMessages fetches and displays messages for a given session
 async function loadSessionMessages(sessionId) {
   currentSessionId = sessionId;
   chatLog.innerHTML = "";
 
   try {
-    // Initialize the LLM chat for this session
+    // 1) Load existing messages from DB first
+    const res = await fetch(`/api/session/${sessionId}/messages/`, {
+      method: "GET",
+      credentials: "same-origin"
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+
+    if (data.messages && data.messages.length > 0) {
+      // There are saved messages: show them (don't re-initialize/chat-start)
+      data.messages.forEach(msg => {
+        appendMessage(msg.role, msg.text);
+      });
+      return;
+    }
+
+    // 2) No DB messages -> ask backend for the initial assistant reply for this session
+    //    (api_init returns the LLM's initial message; it does not create DB sessions)
     const initRes = await fetch("{% url 'api_init' %}", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -514,25 +536,19 @@ async function loadSessionMessages(sessionId) {
     }
 
     const initData = await initRes.json();
+    // Show LLM first message (fallback to friendly text)
     appendMessage("model", initData.model_text || "(no text)");
 
-    // Load existing messages from DB
-    const res = await fetch(`/api/session/${sessionId}/messages/`, {
-      method: "GET",
-      credentials: "same-origin"
-    });
-
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-
-    data.messages.forEach(msg => {
-      appendMessage(msg.role, msg.text);
-    });
-
+    // NOTE: if api_new_session already saved the first messages to DB, the above DB fetch would have returned them.
+    // This branch handles the case where DB is empty but we still want the LLM's initial reply shown.
   } catch (err) {
     appendMessage("model", "Error loading chat: " + err.message);
   }
 }
+
+
+
+
 
 
 

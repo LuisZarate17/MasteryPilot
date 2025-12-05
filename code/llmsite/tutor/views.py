@@ -1,3 +1,4 @@
+# code/llmsite/tutor/views.py
 from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
@@ -239,20 +240,46 @@ def student_edit(request):
 @require_http_methods(["POST"])
 @login_required
 def api_new_session(request):
-    """Create a new Session for the authenticated user and return its metadata."""
     try:
         data = json.loads(request.body.decode("utf-8")) if request.body else {}
     except Exception:
         return HttpResponseBadRequest("Invalid JSON")
 
     title = (data.get("title") or "New session").strip() or "New session"
+    
+    # Create DB session
     session = Session.objects.create(owner=request.user, title=title)
 
-    # Refresh progress on new session creation
+    # mark this session as active in Django session so api_chat persists messages
+    request.session['session_id'] = str(session.id)
+
+    # Initialize LLM chat (StartChat returns chat and list-of-message-dicts)
+    name   = request.user.get_full_name() or request.user.username
+    school = "George Washington High School"
+    grade  = "Sophomore"
+    classes = "Algebra 2, History, AP Language/Composition"
+
+    chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+
+    # store the live chat in memory in the format SendMessage expects:
+    # list of dicts: {"role": "assistant"|"user", "content": "..."}
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = messages
+
+    # persist messages to DB (use 'role' and 'content')
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content")
+        if content:
+            DBChat.objects.create(session=session, role=role, message=content)
+
+    # pick first assistant message to return
+    assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), "Hello!")
+
+    # Refresh progress
     try:
         calculate_student_progress(request.user)
     except Exception as e:
-        # Don't fail session creation if progress calc fails
         print(f"Progress calculation error: {e}")
 
     return JsonResponse({
@@ -260,32 +287,38 @@ def api_new_session(request):
         "id": str(session.id),
         "title": session.title,
         "createdAt": session.created_at.isoformat(),
+        "model_text": assistant_msg
     })
+
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_init(request):
-    #try:
-        #data = json.loads(request.body.decode("utf-8"))
-    #except Exception:
-        #return HttpResponseBadRequest("Invalid JSON")
-
-    name   = "John Doe" #(data.get("studentName") or "").strip()
-    school = "George Washington High School" #(data.get("studentSchool") or "").strip()
-    grade  = "Sophomore" #(data.get("studentGrade") or "").strip()
-    classes = "Algebra 2, History, AP Language/Composition" #(data.get("studentClasses") or "").strip()
+    name   = "John Doe"
+    school = "George Washington High School"
+    grade  = "Sophomore"
+    classes = "Algebra 2, History, AP Language/Composition"
 
     # Initialize the chat.
-    # TODO: Retreive chats and RAG from database.
     chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
 
     # store the live chat object for this user session
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = messages
 
-    model_reply = chat.split("<|assistant|>")[-1].strip()
+    # Get the first assistant message
+    assistant_msg = None
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            assistant_msg = msg.get("content")
+            break
 
-    return JsonResponse({"ok": True, "model_text": model_reply})
+    if not assistant_msg:
+        assistant_msg = "Hello!"  # fallback
+
+    return JsonResponse({"ok": True, "model_text": assistant_msg})
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -498,10 +531,64 @@ def api_session_messages(request, session_id):
     except Session.DoesNotExist:
         return HttpResponseBadRequest("Session not found or not owned by user")
 
-    chats = DBChat.objects.filter(session=session)
+    chats = DBChat.objects.filter(session=session).order_by("id")  # keep chronological order
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
+    # Also populate in-memory chat registry in the format the LLM functions expect:
+    llm_messages = []
+    for c in chats:
+        # DB stores role and message text; ensure keys are 'role' and 'content'
+        llm_messages.append({"role": c.role, "content": c.message})
+
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = llm_messages
+
+    # set the active session for subsequent api_chat persistence
+    request.session['session_id'] = str(session.id)
+
     return JsonResponse({"ok": True, "messages": messages})
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def api_session_init(request, session_id):
+    """
+    Initialize an existing session (StartChat + persist first messages).
+    Use this when the session exists but has no messages yet.
+    """
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
+
+    # Start LLM chat and persist initial messages
+    name = request.user.get_full_name() or request.user.username
+    school = "George Washington High School"
+    grade = "Sophomore"
+    classes = "Algebra 2, History, AP Language/Composition"
+
+    try:
+        chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
+
+    # store in-memory
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = messages
+
+    # persist messages to DB
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+        if content:
+            DBChat.objects.create(session=session, role=role, message=content)
+
+    # set server session pointer
+    request.session['session_id'] = str(session.id)
+
+    # return assistant first message
+    assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), None)
+    return JsonResponse({"ok": True, "model_text": assistant_msg or "Hello!"})
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
@@ -529,3 +616,39 @@ def api_rename_session(request, session_id):
     session.title = new_title
     session.save(update_fields=["title"])
     return JsonResponse({"ok": True, "id": str(session.id), "title": session.title})
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@login_required
+def api_select_session(request, session_id):
+    """
+    Select an existing DB session. Sets request.session['session_id'] and
+    rebuilds CHAT_REGISTRY for this user session from DB messages so
+    subsequent api_chat works and persists messages correctly.
+    """
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
+
+    # set server-side session id so api_chat knows which DB session to attach to
+    request.session['session_id'] = str(session.id)
+
+    # rebuild messages list for in-memory chat registry
+    chats = DBChat.objects.filter(session=session).order_by('id')
+    messages = []
+    for c in chats:
+        messages.append({"role": c.role, "content": c.message})
+
+    sid = _session_id(request)
+    CHAT_REGISTRY[sid] = messages
+
+    return JsonResponse({"ok": True})
+
+
+
+
+
+
+
