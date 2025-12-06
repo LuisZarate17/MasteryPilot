@@ -27,10 +27,41 @@ CHAT_REGISTRY = {}
 model = None
 tokenizer = None
 gemini = None
-if not settings.GEMINI_ENABLED:
-    model, tokenizer = GetModelAndTokenizer()
-else:
-    gemini = StartAIChat()
+
+def ensure_llm_initialized():
+    """
+    Ensure that either local model/tokenizer or Gemini client is initialized.
+    Safe to call multiple times.
+    """
+    global model, tokenizer, gemini
+    if settings.GEMINI_ENABLED:
+        if gemini is None:
+            try:
+                # StartAIChat should be available via languagemodel_legacy import
+                gemini = StartAIChat()
+            except Exception as e:
+                print(f"[ensure_llm_initialized] Failed to start Gemini: {e}")
+                gemini = None
+    else:
+        if model is None or tokenizer is None:
+            try:
+                # Prefer the already-loaded globals (if apps.py set them)
+                model, tokenizer = GetModelAndTokenizer()
+            except Exception:
+                # Fall back to InitModel if GetModelAndTokenizer isn't ready
+                try:
+                    model, tokenizer = InitModel()
+                    # If you want the globals module to know about them:
+                    try:
+                        import tutor.globals as tglobals
+                        tglobals.loaded_model = model
+                        tglobals.loaded_tokenizer = tokenizer
+                    except Exception:
+                        pass
+                except Exception as e:
+                    print(f"[ensure_llm_initialized] Failed to init local model: {e}")
+                    model = tokenizer = None
+
 
 def _session_id(request):
     if not request.session.session_key:
@@ -253,37 +284,65 @@ def api_new_session(request):
         return HttpResponseBadRequest("Invalid JSON")
 
     title = (data.get("title") or "New session").strip() or "New session"
-    
-    # Create DB session
-    session = Session.objects.create(owner=request.user, title=title)
 
-    # mark this session as active in Django session so api_chat persists messages
+    # Create DB session (we keep the session record)
+    session = Session.objects.create(owner=request.user, title=title)
     request.session['session_id'] = str(session.id)
 
-    # Initialize LLM chat (StartChat returns chat and list-of-message-dicts)
+    # Student info
     name   = request.user.get_full_name() or request.user.username
     school = "George Washington High School"
     grade  = "Sophomore"
     classes = "Algebra 2, History, AP Language/Composition"
 
-    chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+    # Ensure LLM/Gemini is initialized
+    ensure_llm_initialized()
 
-    # store the live chat in memory in the format SendMessage expects:
-    # list of dicts: {"role": "assistant"|"user", "content": "..."}
+    global gemini
+    messages = []
+    assistant_msg = "Hello!"  # fallback
+
+    if settings.GEMINI_ENABLED:
+        # Gemini path: call but DON'T persist error messages into DB/history
+        try:
+            if gemini is None:
+                gemini = StartAIChat()
+            initial_msg = Initialization(gemini, name, school, grade, classes) if gemini else None
+            if initial_msg:
+                messages = [{"role": "assistant", "content": initial_msg}]
+                assistant_msg = initial_msg
+        except Exception as e:
+            # Log but do NOT append an assistant error entry into messages/db.
+            print(f"[api_new_session] Gemini initialization error: {e}")
+            # keep messages empty so nothing is persisted
+            messages = []
+            assistant_msg = "Model unavailable. Please try again later."
+    else:
+        # Local LLM path
+        if model is None or tokenizer is None:
+            messages = []
+            assistant_msg = "Model unavailable. Please try again later."
+        else:
+            try:
+                chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+                assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
+            except Exception as e:
+                print(f"[api_new_session] StartChat error: {e}")
+                messages = []
+                assistant_msg = "Model error. Please try again later."
+
+    # store in-memory registry (keep consistent format)
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = messages
 
-    # persist messages to DB (use 'role' and 'content')
+    # persist messages to DB **only if there are real messages** (i.e. no init-error placeholders)
     for m in messages:
         role = m.get("role")
         content = m.get("content")
         if content:
             DBChat.objects.create(session=session, role=role, message=content)
 
-    # pick first assistant message to return
-    assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), "Hello!")
-
-    # Refresh progress
+    # Return assistant_msg (whether real or generic fallback)
     try:
         calculate_student_progress(request.user)
     except Exception as e:
@@ -298,7 +357,6 @@ def api_new_session(request):
     })
 
 
-
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_init(request):
@@ -307,37 +365,47 @@ def api_init(request):
     grade  = "Sophomore"
     classes = "Algebra 2, History, AP Language/Composition"
 
-    # Initialize the chat.
-    # TODO: Retreive chats and RAG from database.
+    # Ensure LLM/Gemini is initialized
+    ensure_llm_initialized()
+    sid = _session_id(request)
+
+    global gemini
+    messages = []
+    assistant_msg = "Hello!"
+
     if not settings.GEMINI_ENABLED:
-        chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+        if model is None or tokenizer is None:
+            messages = []
+            assistant_msg = "Model unavailable. Please try again later."
+        else:
+            try:
+                chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+                assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
+            except Exception as e:
+                print(f"[api_init] StartChat error: {e}")
+                messages = []
+                assistant_msg = "Model error. Please try again later."
 
-        # store the live chat object for this user session
-        sid = _session_id(request)
+        # store the live chat object (only real messages)
         CHAT_REGISTRY[sid] = messages
-
-        # Get the first assistant message
-        assistant_msg = None
-        for msg in messages:
-            if msg.get("role") == "assistant":
-                assistant_msg = msg.get("content")
-                break
-
-        if not assistant_msg:
-            assistant_msg = "Hello!"  # fallback
-
         return JsonResponse({"ok": True, "model_text": assistant_msg})
     else:
-        gemini = StartAIChat()
-        response = Initialization(gemini, name, school, grade, classes)
+        try:
+            if gemini is None:
+                gemini = StartAIChat()
+            response = Initialization(gemini, name, school, grade, classes) if gemini else None
+            if response:
+                CHAT_REGISTRY[sid] = [{"role": "assistant", "content": response}]
+                assistant_msg = response
+            else:
+                CHAT_REGISTRY[sid] = []
+                assistant_msg = "Model unavailable. Please try again later."
+        except Exception as e:
+            print(f"[api_init] Gemini initialization error: {e}")
+            CHAT_REGISTRY[sid] = []
+            assistant_msg = "Model error. Please try again later."
 
-        # store the live chat object for this user session
-        sid = _session_id(request)
-        CHAT_REGISTRY[sid] = "<|assistant|>" + response
-
-
-        return JsonResponse({"ok": True, "model_text": response})
-    
+        return JsonResponse({"ok": True, "model_text": assistant_msg})
 
 
 @csrf_exempt
@@ -356,34 +424,84 @@ def api_chat(request):
     chat = CHAT_REGISTRY.get(sid)
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
-    model_reply = None
-    if not settings.GEMINI_ENABLED: 
-        # call SendMessage on the stored chat
-        reply, messages = SendMessage(model, tokenizer, chat, msg)
 
-        CHAT_REGISTRY[sid] = messages
-        model_reply = reply.split("<|assistant|>")[-1].strip()
+    # Ensure LLM/Gemini ready
+    ensure_llm_initialized()
+
+    assistant_reply_text = None
+    error_occurred = False
+
+    global gemini
+    if not settings.GEMINI_ENABLED:
+        # local model path
+        if model is None or tokenizer is None:
+            assistant_reply_text = "Model unavailable. Please try again later."
+            error_occurred = True
+        else:
+            try:
+                reply, messages = SendMessage(model, tokenizer, chat, msg)
+                # Update registry with the messages returned by SendMessage (these are real model outputs)
+                CHAT_REGISTRY[sid] = messages
+                # Extract assistant reply text
+                assistant_reply_text = reply.split("<|assistant|>")[-1].strip() if isinstance(reply, str) else None
+                if not assistant_reply_text and messages:
+                    assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
+            except Exception as e:
+                print(f"[api_chat] Local SendMessage error: {e}")
+                assistant_reply_text = "Model error, please try again later."
+                error_occurred = True
     else:
-        model_reply = SendMessage(gemini, msg)
-        CHAT_REGISTRY[sid] = CHAT_REGISTRY[sid] + "<|assistant|>" + msg
+        # Gemini path
+        try:
+            if gemini is None:
+                try:
+                    gemini = StartAIChat()
+                except Exception:
+                    gemini = None
+            if gemini:
+                # assume SendMessage(gemini, msg) returns a text assistant reply (legacy helper)
+                assistant_reply_text = SendMessage(gemini, msg)
+            else:
+                assistant_reply_text = "Model unavailable. Please try again later."
+                error_occurred = True
+        except Exception as e:
+            print(f"[api_chat] Gemini SendMessage error: {e}")
+            assistant_reply_text = "Model error, please try again later."
+            error_occurred = True
 
-    # Try to persist the user message and assistant reply to database
+        # Only append user + assistant to in-memory registry if the assistant reply is a normal text (no init error)
+        existing = CHAT_REGISTRY.get(sid)
+        if not isinstance(existing, list):
+            existing = []
+        existing.append({"role": "user", "content": msg})
+        if not error_occurred:
+            existing.append({"role": "assistant", "content": assistant_reply_text})
+        CHAT_REGISTRY[sid] = existing
+
+    # Persist to DB: only persist user + assistant when there was no model error.
     try:
         session_id = request.session.get("session_id")
         if session_id:
             session = Session.objects.get(id=session_id, owner=request.user)
+            # Always persist the user message
             DBChat.objects.create(session=session, role="user", message=msg)
-            DBChat.objects.create(session=session, role="assistant", message=reply)
-            
-            # Refresh progress periodically (every 5th message to reduce overhead)
+            # Persist assistant message only when model returned a real reply (no error)
+            if not error_occurred and assistant_reply_text:
+                DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+
+            # Refresh progress periodically (every 5th user message)
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
                 calculate_student_progress(request.user)
     except Exception as e:
-        # Don't fail chat if persistence fails
         print(f"Chat persistence or progress calc error: {e}")
-    
-    return JsonResponse({"ok": True, "model_text": model_reply})
+
+    # If error_occurred, include an 'error' flag so frontend can show it without inserting into history.
+    if error_occurred:
+        return JsonResponse({"ok": True, "model_text": assistant_reply_text, "error": True})
+    else:
+        return JsonResponse({"ok": True, "model_text": assistant_reply_text})
+
 
 @csrf_exempt
 @require_http_methods(["POST"])

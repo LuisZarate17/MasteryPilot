@@ -1,4 +1,3 @@
-.env
 # === Python / Django ===
 __pycache__/
 *.py[cod]
@@ -7,6 +6,7 @@ __pycache__/
 *.so
 *.egg-info/
 .env
+venv/
 db.sqlite3
 
 # Byte-compiled / cached files
