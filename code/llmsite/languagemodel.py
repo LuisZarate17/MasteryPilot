@@ -1,6 +1,7 @@
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 from dotenv import load_dotenv
 import os
+import torch
 
 # Import RAG helper functions
 from rag import load_txt_files, load_pdf_files, retrieve
@@ -58,7 +59,22 @@ def InitModel():
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype="auto", device_map="auto")
 
-    return (model, tokenizer)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        dtype = torch.float16
+    else:
+        device = torch.device("cpu")
+        dtype = torch.float32
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        torch_dtype=dtype,
+    )
+
+    model.to(device)
+    model.eval()
+
+    return model, tokenizer
 
 def LoadCurriculum():
     """Load text and PDF files into RAG if available."""
