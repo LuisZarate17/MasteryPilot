@@ -8,6 +8,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
 from django.conf import settings
+from django.utils import timezone
 from django.utils.text import get_valid_filename
 from .forms import SignupForm, UploadRagForm
 import json
@@ -16,8 +17,8 @@ import os
 from languagemodel import InitModel, StartChat, SendMessage
 from languagemodel_legacy import *
 from httpx import request
-from .models import Session, Chat as DBChat, StudentProgress
-from .utils import is_teacher_or_admin, is_admin, calculate_student_progress
+from .models import Quiz, Session, Chat as DBChat, StudentProgress
+from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile
 from tutor.globals import GetModelAndTokenizer
 
@@ -789,6 +790,72 @@ def api_select_session(request, session_id):
     return JsonResponse({"ok": True})
 
 
+@require_http_methods(["POST"])
+@login_required
+def api_grade_quiz(request):
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return HttpResponseBadRequest("No active session")
+
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return HttpResponseBadRequest("Session not found")
+    
+    quiz = Quiz.objects.filter(session=session, status="active").order_by("-started_at").first()
+    if quiz is None:
+        return JsonResponse({
+            "ok": True,
+            "model_text": "No active quiz",
+            "error": True
+        })
+    
+    quiz_obj = quiz.quiz_json
+    test = (quiz_obj or {}).get("test") or {}
+    q_items = list(test.items())
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+
+    csv_string = (data.get("answers") or "").strip()
+    if not csv_string:
+        return HttpResponseBadRequest("answers is required")
+    
+    answers = parse_csv_answers(csv_string)
+    
+    total_points = 0.0
+    earned_points = 0.0
+    results = []
+
+    for idx, (qid, qdata) in enumerate(q_items):
+        qtype = (qdata.get("type") or "").strip()
+        correct = qdata.get("correct")
+
+        try:
+            possible = float(qdata.get("points", 1))
+        except Exception:
+            possible = 1.0
+
+        total_points += possible
+        user_ans = answers[idx] if idx < len(answers) else ""
+
+        is_correct = str(user_ans).strip() == str(correct).strip()
+        feedback = "correct" if is_correct else f"incorrect: Answer was {str(correct).strip()}"
+
+        earned_points += possible if is_correct else 0
+        results.append(feedback)
+        
+    quiz.possible_pts = total_points
+    quiz.earned_pts = earned_points
+    quiz.status = "graded"
+    quiz.ended_at = timezone.now()
+    quiz.save(update_fields=["status", "possible_pts", "earned_pts", "ended_at"])
+
+    feedback_csv = ",".join([f'"{x}"' for x in results])
+
+    return JsonResponse({"ok": True, "model_text": feedback_csv})
 
 
 

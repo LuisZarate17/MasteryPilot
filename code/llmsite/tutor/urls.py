@@ -18,6 +18,7 @@ urlpatterns = [
     path("api/init/", api_init, name="api_init"),
     path("api/session/new/", api_new_session, name="api_new_session"),
     path("api/chat/", api_chat, name="api_chat"),
+    path("api/grade-quiz/", views.api_grade_quiz, name="api_grade_quiz"),
     path("api/reset/", api_reset, name="api_reset"),
     path("api/progress/summary/", progress_summary, name="progress_summary"),
     path("dashboard/create_account/", account_create, name="account_create"),

@@ -4,6 +4,8 @@ from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
 
+import csv, io
+
 # Security
 
 def is_teacher_or_admin(user):
@@ -26,6 +28,25 @@ def is_admin(user):
 
     is_admin = AdminProfile.objects.filter(user=user).exists()
     return is_admin
+
+# Quiz Grading
+
+def create_or_replace_active_quiz(session, quiz_obj):
+    Quiz.objects.filter(session=session, status="active").update(
+        status="submitted",
+        ended_at=timezone.now(),
+    )
+    return Quiz.objects.create(
+        session=session,
+        status="active",
+        quiz_json=quiz_obj,
+    )
+
+def parse_csv_answers(csv_string: str) -> list[str]:
+    f = io.StringIO(csv_string or "")
+    rows = list(csv.reader(f))
+    return [c.strip() for c in (rows[0] if rows else [])]
+
 
 
 # Progress Tracking
@@ -56,29 +77,20 @@ def calculate_student_progress(user):
     graded_quizzes = Quiz.objects.filter(
         session__owner=user,
         status='graded'
-    ).prefetch_related('answers')
+    )
     
     total_quizzes = graded_quizzes.count()
     
     # Calculate quiz average from graded_json
-    quiz_scores = []
+    quiz_average = None
+    earned_total = 0.0
+    possible_total = 0.0
     for quiz in graded_quizzes:
-        quiz_answer = quiz.answers.first()
-        if quiz_answer and quiz_answer.graded_json:
-            # Count correct answers
-            correct_count = 0
-            total_items = 0
-            for item_id, grading in quiz_answer.graded_json.items():
-                if isinstance(grading, dict) and 'isCorrect' in grading:
-                    total_items += 1
-                    if grading['isCorrect']:
-                        correct_count += 1
-            
-            if total_items > 0:
-                score = (correct_count / total_items) * 100
-                quiz_scores.append(score)
-    
-    quiz_average = Decimal(sum(quiz_scores) / len(quiz_scores)) if quiz_scores else None
+        earned_total += quiz.earned_pts
+        possible_total += quiz.possible_pts
+
+    if possible_total > 0:
+        quiz_average = earned_total / possible_total
     
     # Calculate overall completion percentage (Option C: Hybrid)
     # 70% weight on quiz performance, 30% weight on session activity

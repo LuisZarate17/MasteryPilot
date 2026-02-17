@@ -251,7 +251,7 @@
     await showTypingAlert();
     try {
       // Send answers to backend (simulate as chat message for now)
-      const res = await fetch("{% url 'api_chat' %}", {
+      const res = await fetch("{% url 'api_grade_quiz' %}", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

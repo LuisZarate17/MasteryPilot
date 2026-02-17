@@ -30,6 +30,8 @@ class Quiz(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     session = models.ForeignKey(Session, on_delete=models.CASCADE, related_name='quizzes')
     status = models.CharField(max_length=10, choices=STATUS, default="active", db_index=True)
+    possible_pts = models.FloatField(default=0.0)
+    earned_pts = models.FloatField(default=0.0)
     quiz_json = models.JSONField()            # items, keys, etc.
     started_at = models.DateTimeField(auto_now_add=True)
     ended_at = models.DateTimeField(null=True, blank=True)
