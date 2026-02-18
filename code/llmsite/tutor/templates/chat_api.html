@@ -1,4 +1,4 @@
-<!-- chat.html -->
+<!-- chat_api.html -->
 {% extends "base.html" %}
 {% block title %}Chat · AI Tutor{% endblock %}
 {% block content %}
@@ -24,9 +24,10 @@
       <div class="bg-white border rounded-2xl shadow p-6">
         <h3 class="font-semibold text-lg mb-2">Quiz</h3>
         <form id="quizForm" class="space-y-4"></form>
-        <button id="submitQuizBtn"
-          class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Submit
-          Answers</button>
+        <button id="submitQuizBtn" type="button"
+          class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">
+          Submit Answers
+        </button>
       </div>
     </div>
 
@@ -99,6 +100,8 @@
 
   initializeChat();
 
+  
+
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (quizActive) return;
@@ -137,6 +140,26 @@
 
     await removeTypingAlert();
   });
+
+
+  function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== "") {
+      const cookies = document.cookie.split(";");
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+        // Does this cookie string begin with the name we want?
+        if (cookie.startsWith(name + "=")) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
+      }
+    }
+    return cookieValue;
+  }
+
+  const csrftoken = getCookie("csrftoken");
+
 
   function isQuizJson(text) {
     const quizObj = extractQuizObject(text);
@@ -238,37 +261,52 @@
     }, 50);
   }
 
-  submitQuizBtn.addEventListener("click", async (e) => {
-    e.preventDefault();
-    // Collect answers in CSV format
-    const formData = new FormData(quizForm);
-    let csvAnswers = [];
-    for (let [key, value] of formData.entries()) {
+submitQuizBtn.addEventListener("click", async (e) => {
+  e.preventDefault();
+
+  // Prefer explicitly reading checked radio inputs (robust)
+  const checked = quizForm.querySelectorAll('input[type="radio"]:checked');
+  let csvAnswers = Array.from(checked).map(r => r.value);
+
+  // Fallback: if none found, try FormData (defensive)
+  if (csvAnswers.length === 0) {
+    const fd = new FormData(quizForm);
+    for (let [, value] of fd.entries()) {
       csvAnswers.push(value);
     }
-    const csvString = csvAnswers.map(v => typeof v === "string" && v.includes(",") ? `"${v}"` : v).join(",");
+  }
 
-    await showTypingAlert();
-    try {
-      // Send answers to backend (simulate as chat message for now)
-      const res = await fetch("{% url 'api_chat' %}", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ message: csvString })
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      showQuizFeedbackModal(data.model_text);
-    } catch (err) {
-      showQuizFeedbackModal("Error: " + err.message);
-    }
-    await removeTypingAlert();
-    quizCard.classList.add("hidden");
-    quizActive = false;
-    chatInput.disabled = false;
-    document.getElementById("chat-send-button").disabled = false;
-  });
+  const csvString = csvAnswers
+    .map(v => (typeof v === "string" && v.includes(",")) ? `"${v}"` : v)
+    .join(",");
+
+  // Debug: make sure console shows the CSV (enable "Logs/All" in DevTools)
+  console.log("Quiz answer CSV:", csvString);
+
+  await showTypingAlert();
+  try {
+    const res = await fetch("{% url 'api_grade_quiz' %}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": csrftoken
+      },
+      credentials: "same-origin",
+      body: JSON.stringify({ answers: csvString })
+    });
+
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    showQuizFeedbackModal(data.model_text);
+  } catch (err) {
+    showQuizFeedbackModal("Error: " + err.message);
+  }
+  await removeTypingAlert();
+  quizCard.classList.add("hidden");
+  quizActive = false;
+  chatInput.disabled = false;
+  document.getElementById("chat-send-button").disabled = false;
+});
 
   function showQuizFeedbackModal(feedbackText) {
     let formatted = "";
@@ -322,9 +360,15 @@
     try {
       const res = await fetch("{% url 'api_init' %}", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
         credentials: "same-origin",
-        body: JSON.stringify({})
+        body: JSON.stringify({
+          message: text,
+          session_id: currentSessionId
+        })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -366,7 +410,9 @@
         // Create a new session with default title
         const res = await fetch("{% url 'api_new_session' %}", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+               "Content-Type": "application/json",
+               "X-CSRFToken": csrftoken},
             credentials: "same-origin",
             body: JSON.stringify({})  // no title needed, backend will default
         });
@@ -418,6 +464,7 @@ document.addEventListener("click", async (e) => {
 
         const res = await fetch(`/api/session/${id}/delete/`, {
             method: "DELETE",
+            headers: { "X-CSRFToken": csrftoken },
             credentials: "same-origin"
         });
 
@@ -439,7 +486,9 @@ document.addEventListener("click", async (e) => {
 
         const res = await fetch(`/api/session/${id}/rename/`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json",
+                        "X-CSRFToken": csrftoken
+             },
             credentials: "same-origin",
             body: JSON.stringify({ title: newName })
         });

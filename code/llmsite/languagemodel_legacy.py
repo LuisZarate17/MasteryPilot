@@ -70,7 +70,29 @@ def Initialization(chat, studentName, studentSchool, studentGrade, studentClasse
 # Conversation
 def SendMessage(chat, message: str):
     try:
-        response = chat.send_message(message)
+        lower_msg = message.lower()
+        if "quiz" in lower_msg or "practice exam" in lower_msg:
+            quiz_prompt = """
+            The student has requested a quiz. You must respond ONLY with JSON following this schema exactly:
+            {
+              "test": {
+                "q1": {
+                  "question": "...",
+                  "type": "multiple-choice",
+                  "answers": ["Answer 1", "Answer 2", "Answer 3", "Answer 4"],
+                  "correct": "index"
+                },
+                "q2": { ... }
+              }
+            }
+
+            Do not include any text outside the JSON. Create 2–4 Algebra 2 questions at the student's level.
+            """.strip()
+
+            response = chat.send_message(quiz_prompt)
+        else:
+            response = chat.send_message(message)
+
         return response.text or str(response)
 
     except Exception as e:
