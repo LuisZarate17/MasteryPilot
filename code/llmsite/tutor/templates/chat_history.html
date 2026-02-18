@@ -80,12 +80,119 @@ document.addEventListener("DOMContentLoaded", async () => {
 function appendMessage(role, text) {
   const div = document.createElement("div");
   div.className = role === "user" ? "flex gap-3 justify-end" : "flex gap-3";
-  div.innerHTML = role === "user"
-    ? `<div class='bg-brand-600 text-white rounded-2xl px-4 py-2 max-w-[75%]'>${text}</div>`
-    : `<div class='h-8 w-8 rounded-full bg-brand-600 shrink-0'></div>
-        <div class='bg-gray-100 rounded-2xl px-4 py-2 max-w-[75%]'>${text}</div>`;
+  if (role === "user") {
+    div.innerHTML = `<div class='bg-brand-600 text-white rounded-2xl px-4 py-2 max-w-[75%]'>${escapeHtml(text || "")}</div>`;
+  } else {
+    const rendered = formatTeacherMessage(text || "");
+    div.innerHTML = `<div class='h-8 w-8 rounded-full bg-brand-600 shrink-0'></div>
+      <div class='bg-gray-100 rounded-2xl px-4 py-2 max-w-[75%]'>${rendered}</div>`;
+  }
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+function formatTeacherMessage(text) {
+  const quizObj = parseQuizJson(text);
+  if (!quizObj) return escapeHtml(text);
+  return renderReadOnlyQuiz(quizObj);
+}
+
+function renderReadOnlyQuiz(quizObj) {
+  let html = `<div class="space-y-3">`;
+  html += `<div class="font-semibold text-gray-900">Quiz (read only)</div>`;
+
+  Object.entries(quizObj).forEach(([qid, qdata], idx) => {
+    if (!qdata || typeof qdata !== "object") return;
+
+    const question = qdata.question || `Question ${idx + 1}`;
+    const qType = (qdata.type || "").toLowerCase();
+    const correct = String(qdata.correct ?? "").trim();
+
+    html += `<div class="rounded-xl border border-gray-200 bg-white p-3 space-y-2">`;
+    html += `<div class="text-sm font-semibold text-gray-900">${idx + 1}. ${escapeHtml(question)}</div>`;
+
+    if (qType === "multiple-choice" && Array.isArray(qdata.answers)) {
+      html += `<ul class="space-y-1">`;
+      qdata.answers.forEach((ans, i) => {
+        const choiceText = String(ans ?? "");
+        const choiceNumber = String(i + 1);
+        const isCorrect = correct === choiceNumber || correct.toLowerCase() === choiceText.trim().toLowerCase();
+        html += `<li class="rounded-md px-2 py-1 text-sm ${isCorrect ? "bg-green-100 text-green-800 border border-green-300" : "text-gray-700"}">`;
+        html += `${escapeHtml(choiceNumber)}. ${escapeHtml(choiceText)}`;
+        if (isCorrect) html += ` <span class="ml-1 font-semibold">(Correct answer)</span>`;
+        html += `</li>`;
+      });
+      html += `</ul>`;
+    } else {
+      html += `<div class="text-sm text-gray-700">Correct answer: <span class="font-semibold text-green-700">${escapeHtml(correct || "N/A")}</span></div>`;
+    }
+
+    html += `</div>`;
+  });
+
+  html += `</div>`;
+  return html;
+}
+
+function parseQuizJson(text) {
+  const obj = tryParseJSON(text);
+  if (!obj || typeof obj !== "object") return null;
+
+  const unwrap = (v) => {
+    if (!v) return null;
+    if (typeof v === "object") return v;
+    if (typeof v === "string") return tryParseJSON(v) || null;
+    return null;
+  };
+
+  const candidate = unwrap(obj.quiz) || unwrap(obj.test) || unwrap(obj.questions) || obj;
+  return looksLikeQuizObject(candidate) ? candidate : null;
+}
+
+function looksLikeQuizObject(candidate) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return false;
+  const entries = Object.entries(candidate);
+  if (!entries.length) return false;
+
+  let hasQuestionShape = false;
+  for (const [, value] of entries) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    if ("question" in value || "correct" in value || "answers" in value || "type" in value) {
+      hasQuestionShape = true;
+    }
+  }
+  return hasQuestionShape;
+}
+
+function tryParseJSON(text) {
+  if (!text || typeof text !== "string") return null;
+  let jsonText = text.trim();
+  jsonText = jsonText.replace(/[\n\r\t]/g, " ");
+  jsonText = jsonText.replace(/'([a-zA-Z0-9_]+)'\s*:/g, "\"$1\":");
+  jsonText = jsonText.replace(/: '([^']*)'/g, ": \"$1\"");
+  jsonText = jsonText.replace(/,\s*([}\]])/g, "$1");
+
+  const match = jsonText.match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      return JSON.parse(match[0]);
+    } catch (e) {}
+  }
+
+  try {
+    return JSON.parse(jsonText);
+  } catch (e) {
+    return null;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 async function loadSessions() {
