@@ -11,8 +11,7 @@
       <button id="newSession" class="text-sm text-brand-600 hover:underline">New</button>
     </div>
     <ul id="sessionList" class="space-y-2 text-sm">
-<!-- Real sessions will be inserted here by JS -->
-
+      <!-- Real sessions will be inserted here by JS -->
     </ul>
   </aside>
 
@@ -24,9 +23,10 @@
       <div class="bg-white border rounded-2xl shadow p-6">
         <h3 class="font-semibold text-lg mb-2">Quiz</h3>
         <form id="quizForm" class="space-y-4"></form>
-        <button id="submitQuizBtn"
-          class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Submit
-          Answers</button>
+        <button id="submitQuizBtn" type="button"
+          class="mt-2 rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">
+          Submit Answers
+        </button>
       </div>
     </div>
 
@@ -45,7 +45,9 @@
         <input id="chatInput" class="flex-1 rounded-xl border px-3 py-2 focus:ring-2 focus:ring-brand-500"
           placeholder="Type your question...">
         <button id="chat-send-button"
-          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Send</button>
+          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">
+          Send
+        </button>
       </form>
     </div>
     <div id="typing-alert-div" class="px-4 py-2 font-semibold"></div>
@@ -57,7 +59,9 @@
         <h3 class="font-semibold text-lg mb-2">Quiz Results</h3>
         <div id="quizFeedbackContent" class="mb-4"></div>
         <button id="closeQuizFeedback"
-          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">Close</button>
+          class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">
+          Close
+        </button>
       </div>
     </div>
   </section>
@@ -82,6 +86,24 @@
 
 {% block scripts %}
 <script>
+  // --- CSRF helpers (must be first) ---
+  function getCookie(name) {
+    let cookieValue = null;
+    if (document.cookie && document.cookie !== "") {
+      const cookies = document.cookie.split(";");
+      for (let i = 0; i < cookies.length; i++) {
+        const cookie = cookies[i].trim();
+        if (cookie.startsWith(name + "=")) {
+          cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+          break;
+        }
+      }
+    }
+    return cookieValue;
+  }
+  const csrftoken = getCookie("csrftoken");
+
+  // --- DOM refs / state ---
   const chatForm = document.getElementById("chatForm");
   const chatInput = document.getElementById("chatInput");
   const chatLog = document.getElementById("chatLog");
@@ -94,11 +116,9 @@
   const quizFeedbackContent = document.getElementById("quizFeedbackContent");
   const closeQuizFeedback = document.getElementById("closeQuizFeedback");
   let currentSessionId = null;
-
   let quizActive = false;
 
-  initializeChat();
-
+  // --- Main chat submit ---
   chatForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     if (quizActive) return;
@@ -112,19 +132,19 @@
     try {
       const res = await fetch("{% url 'api_chat' %}", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
         credentials: "same-origin",
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: text,
           session_id: currentSessionId
         })
-    });
-
+      });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
 
-      // Check if response is a quiz JSON
-      // Always check for quiz JSON in every response
       const quizObj = parseQuizJson(data.model_text);
       if (quizObj) {
         showQuizCard(quizObj);
@@ -138,6 +158,7 @@
     await removeTypingAlert();
   });
 
+  // --- Quiz parsing helpers ---
   function isQuizJson(text) {
     const quizObj = extractQuizObject(text);
     return !!quizObj;
@@ -150,42 +171,35 @@
   function extractQuizObject(text) {
     const obj = tryParseJSON(text);
     if (!obj) return null;
-    // If the top-level object is a quiz, test, or questions, use its value
-    // helper to coerce possible stringified JSON into object
+
     const unwrap = (v) => {
       if (!v) return null;
-      if (typeof v === 'object') return v;
-      if (typeof v === 'string') return tryParseJSON(v) || null;
+      if (typeof v === "object") return v;
+      if (typeof v === "string") return tryParseJSON(v) || null;
       return null;
     };
 
     const quizVal = unwrap(obj.quiz) || unwrap(obj.test) || unwrap(obj.questions);
     if (quizVal) return quizVal;
-    // If the object itself looks like a quiz (has q1/q2 keys), use it
+
     const keys = Object.keys(obj);
     if (keys.some(k => /^q\d+$/i.test(k))) return obj;
     return null;
   }
 
   function tryParseJSON(text) {
-    if (!text || typeof text !== 'string') return null;
+    if (!text || typeof text !== "string") return null;
     let jsonText = text.trim();
-    // Remove newlines and tabs
-    jsonText = jsonText.replace(/[\n\r\t]/g, ' ');
-    // Replace single quotes around keys with double quotes
+    jsonText = jsonText.replace(/[\n\r\t]/g, " ");
     jsonText = jsonText.replace(/'([a-zA-Z0-9_]+)'\s*:/g, '"$1":');
-    // Replace single quotes around string values with double quotes
     jsonText = jsonText.replace(/: '([^']*)'/g, ': "$1"');
-    // Remove trailing commas before closing braces/brackets
-    jsonText = jsonText.replace(/,\s*([}\]])/g, '$1');
-    // Try parsing the largest JSON object in the string
+    jsonText = jsonText.replace(/,\s*([}\]])/g, "$1");
     let match = jsonText.match(/\{[\s\S]*\}/);
     if (match) {
       try {
         return JSON.parse(match[0]);
-      } catch (e) { }
+      } catch (e) {}
     }
-    // Try parsing the whole string
     try {
       return JSON.parse(jsonText);
     } catch (e) {
@@ -193,14 +207,15 @@
     }
   }
 
+  // --- Quiz rendering ---
   function showQuizCard(quizObj) {
     quizActive = true;
     quizCard.classList.remove("hidden");
     chatInput.disabled = true;
     document.getElementById("chat-send-button").disabled = true;
     quizForm.innerHTML = "";
-    // Render questions
-    Object.entries(quizObj).forEach(([qid, qdata], idx) => {
+
+    Object.entries(quizObj).forEach(([qid, qdata]) => {
       let html = "";
       html += `<div class='mb-2'><label class='font-semibold'>${qdata.question}</label>`;
       if (qdata.type === "multiple-choice" && qdata.answers) {
@@ -215,47 +230,45 @@
       html += `</div>`;
       quizForm.innerHTML += html;
     });
-    // Auto-scroll quiz card into view and focus the first input
-    // Use a small timeout to ensure DOM updates are applied
+
     setTimeout(() => {
       try {
-        // Scroll the quiz card into view (center of viewport)
-        quizCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-        // Focus the first interactive element in the quiz form
-        const firstInput = quizForm.querySelector('input, textarea, select');
+        quizCard.scrollIntoView({ behavior: "smooth", block: "center" });
+        const firstInput = quizForm.querySelector("input, textarea, select");
         if (firstInput) {
           firstInput.focus({ preventScroll: true });
-          // If the first input is a radio group, ensure the first radio is checked for keyboard focus
-          if (firstInput.type === 'radio') {
+          if (firstInput.type === "radio") {
             firstInput.checked = true;
           }
         }
       } catch (e) {
-        // swallow errors in UI focus/scroll
-        console.debug('quiz scroll/focus failed', e);
+        console.debug("quiz scroll/focus failed", e);
       }
     }, 50);
   }
 
+  // --- Quiz submit / grading ---
   submitQuizBtn.addEventListener("click", async (e) => {
     e.preventDefault();
-    // Collect answers in CSV format
     const formData = new FormData(quizForm);
     let csvAnswers = [];
-    for (let [key, value] of formData.entries()) {
+    for (let [, value] of formData.entries()) {
       csvAnswers.push(value);
     }
-    const csvString = csvAnswers.map(v => typeof v === "string" && v.includes(",") ? `"${v}"` : v).join(",");
+    const csvString = csvAnswers
+      .map(v => typeof v === "string" && v.includes(",") ? `"${v}"` : v)
+      .join(",");
 
     await showTypingAlert();
     try {
-      // Send answers to backend (simulate as chat message for now)
       const res = await fetch("{% url 'api_grade_quiz' %}", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
         credentials: "same-origin",
-        body: JSON.stringify({ message: csvString })
+        body: JSON.stringify({ answers: csvString })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -276,13 +289,12 @@
     try {
       results = typeof feedbackText === "string" ? JSON.parse(feedbackText) : feedbackText;
     } catch {
-      // fallback: try to extract JSON substring
-      const start = feedbackText.indexOf('{');
-      const end = feedbackText.lastIndexOf('}');
+      const start = feedbackText.indexOf("{");
+      const end = feedbackText.lastIndexOf("}");
       if (start !== -1 && end !== -1 && end > start) {
         try {
           results = JSON.parse(feedbackText.slice(start, end + 1));
-        } catch { }
+        } catch {}
       }
     }
     if (results && typeof results === "object") {
@@ -293,13 +305,14 @@
           correct = val.startsWith("correct");
           explanation = val.replace(/^correct-?|^incorrect-?/, "");
         }
-        // Use icons: check for correct, x for incorrect
         formatted += `<div class='flex items-start gap-2'>`;
         formatted += correct
           ? `<span class='inline-block h-6 w-6 bg-brand-600 rounded-full flex items-center justify-center text-white font-bold'>✓</span>`
           : `<span class='inline-block h-6 w-6 bg-red-500 rounded-full flex items-center justify-center text-white font-bold'>✗</span>`;
         formatted += `<div><span class='font-semibold'>${qid.toUpperCase()}:</span> `;
-        formatted += correct ? `<span class='text-brand-700'>Correct</span>` : `<span class='text-red-600'>Incorrect</span>`;
+        formatted += correct
+          ? `<span class='text-brand-700'>Correct</span>`
+          : `<span class='text-red-600'>Incorrect</span>`;
         if (explanation) {
           formatted += `<div class='text-sm text-gray-700 mt-1'>${explanation}</div>`;
         }
@@ -312,17 +325,22 @@
     quizFeedbackContent.innerHTML = formatted;
     quizFeedbackModal.classList.remove("hidden");
   }
+
   closeQuizFeedback.addEventListener("click", () => {
     quizFeedbackModal.classList.add("hidden");
     quizFeedbackContent.innerText = "";
   });
 
+  // --- Initial chat setup ---
   async function initializeChat() {
     await showTypingAlert();
     try {
       const res = await fetch("{% url 'api_init' %}", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
         credentials: "same-origin",
         body: JSON.stringify({})
       });
@@ -335,6 +353,7 @@
     await removeTypingAlert();
   }
 
+  // --- Typing indicator helpers ---
   function showTypingAlert() {
     const alert = document.createElement("p");
     alert.id = "typing-alert-message";
@@ -349,6 +368,7 @@
     document.getElementById("chat-send-button").disabled = false;
   }
 
+  // --- Message rendering ---
   function appendMessage(role, text) {
     const div = document.createElement("div");
     div.className = role === "user" ? "flex gap-3 justify-end" : "flex gap-3";
@@ -360,197 +380,177 @@
     chatLog.scrollTop = chatLog.scrollHeight;
   }
 
-// New Session button handler
-document.getElementById("newSession").addEventListener("click", async () => {
-  try {
-    // Create a new session in DB (backend also returns the first LLM message)
-    const res = await fetch("{% url 'api_new_session' %}", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({}) // backend will default title
-    });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    currentSessionId = data.id;
+  // --- New Session button ---
+  document.getElementById("newSession").addEventListener("click", async () => {
+    try {
+      const res = await fetch("{% url 'api_new_session' %}", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({})
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      currentSessionId = data.id;
 
-    // Add session to sidebar
-    const li = document.createElement('li');
-    li.className = 'p-2 rounded-lg hover:bg-gray-50 cursor-pointer';
-    li.dataset.sessionId = data.id;
-    li.innerText = data.title + ' — ' + new Date(data.createdAt).toLocaleString();
-    li.addEventListener("click", () => loadSessionMessages(data.id));
+      const li = document.createElement("li");
+      li.className = "p-2 rounded-lg hover:bg-gray-50 cursor-pointer";
+      li.dataset.sessionId = data.id;
+      li.innerText = data.title + " — " + new Date(data.createdAt).toLocaleString();
+      li.addEventListener("click", () => loadSessionMessages(data.id));
 
-    const sessionList = document.getElementById('sessionList');
-    sessionList.prepend(li);
+      const sessionList = document.getElementById("sessionList");
+      sessionList.prepend(li);
 
-    // Replace chat log with initial assistant message returned by api_new_session
-    chatLog.innerHTML = '';
-    const initial = data.model_text || `Session created: ${data.title}`;
-    appendMessage('model', initial);
+      chatLog.innerHTML = "";
+      const initial = data.model_text || `Session created: ${data.title}`;
+      appendMessage("model", initial);
+    } catch (err) {
+      alert("Create session failed: " + err.message);
+    }
+  });
 
-    // NOTE: do NOT call api_init here for new session (we already got the assistant reply)
-  } catch (err) {
-    alert('Create session failed: ' + err.message);
-  }
-});
-
-
-
-
-
-// On page load, load existing sessions
-document.addEventListener("DOMContentLoaded", async () => {
+  // --- Load sessions on page load ---
+  document.addEventListener("DOMContentLoaded", async () => {
     await loadSessions();
     const sessionList = document.getElementById("sessionList");
     if (sessionList.children.length === 0) {
-        document.getElementById("newSession").click(); // auto-create session
+      document.getElementById("newSession").click();
     } else {
-        const firstSessionId = sessionList.children[0].dataset.sessionId;
-        currentSessionId = firstSessionId;
-        loadSessionMessages(firstSessionId);
+      const firstSessionId = sessionList.children[0].dataset.sessionId;
+      currentSessionId = firstSessionId;
+      loadSessionMessages(firstSessionId);
     }
-});
+  });
 
-// Delete session button handler
-document.addEventListener("click", async (e) => {
+  // --- Delete session ---
+  document.addEventListener("click", async (e) => {
     if (e.target.classList.contains("delete-btn")) {
-        const id = e.target.dataset.id;
+      const id = e.target.dataset.id;
+      if (!confirm("Delete this chat? This cannot be undone.")) return;
 
-        if (!confirm("Delete this chat? This cannot be undone.")) return;
+      const res = await fetch(`/api/session/${id}/delete/`, {
+        method: "DELETE",
+        headers: {
+          "X-CSRFToken": csrftoken
+        },
+        credentials: "same-origin"
+      });
 
-        const res = await fetch(`/api/session/${id}/delete/`, {
-            method: "DELETE",
-            credentials: "same-origin"
-        });
-
-        if (res.ok) {
-            // remove from sidebar
-            e.target.closest("li").remove();
-            chatLog.innerHTML = ""; // clear chat panel
-        }
+      if (res.ok) {
+        e.target.closest("li").remove();
+        chatLog.innerHTML = "";
+      }
     }
-});
+  });
 
-// Rename session button handler
-document.addEventListener("click", async (e) => {
+  // --- Rename session ---
+  document.addEventListener("click", async (e) => {
     if (e.target.classList.contains("rename-btn")) {
-        const id = e.target.dataset.id;
+      const id = e.target.dataset.id;
+      const newName = prompt("Rename session:");
+      if (!newName) return;
 
-        const newName = prompt("Rename session:");
-        if (!newName) return;
+      const res = await fetch(`/api/session/${id}/rename/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({ title: newName })
+      });
 
-        const res = await fetch(`/api/session/${id}/rename/`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ title: newName })
-        });
-
-        if (res.ok) {
-            e.target.closest("li").querySelector(".session-title").textContent = newName;
-        }
+      if (res.ok) {
+        e.target.closest("li").querySelector(".session-title").textContent = newName;
+      }
     }
-});
+  });
 
+  // --- Load sessions list ---
+  async function loadSessions() {
+    const sessionList = document.getElementById("sessionList");
+    sessionList.innerHTML = "";
+    try {
+      const res = await fetch("{% url 'api_list_sessions' %}", {
+        method: "GET",
+        credentials: "same-origin"
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
 
-async function loadSessions() {
-  const sessionList = document.getElementById("sessionList");
-  sessionList.innerHTML = "";
+      data.sessions.forEach(session => {
+        const li = document.createElement("li");
+        li.className = "session-item flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 cursor-pointer";
+        li.dataset.sessionId = session.id;
 
-  try {
-    const res = await fetch("{% url 'api_list_sessions' %}", {
-      method: "GET",
-      credentials: "same-origin"
-    });
-
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-
-    data.sessions.forEach(session => {
-      const li = document.createElement("li");
-      li.className = "session-item flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 cursor-pointer";
-      li.dataset.sessionId = session.id;
-
-      li.innerHTML = `
-        <span class="session-title">${session.title}</span>
-        <div class="flex gap-2">
+        li.innerHTML = `
+          <span class="session-title">${session.title}</span>
+          <div class="flex gap-2">
             <button class="rename-btn text-blue-500" data-id="${session.id}">✏️</button>
             <button class="delete-btn text-red-500" data-id="${session.id}">🗑️</button>
-        </div>
-      `;
+          </div>
+        `;
 
-      li.addEventListener("click", (e) => {
-        // prevent button clicks from also triggering session load
-        if (e.target.classList.contains("rename-btn")) return;
-        if (e.target.classList.contains("delete-btn")) return;
+        li.addEventListener("click", (e) => {
+          if (e.target.classList.contains("rename-btn")) return;
+          if (e.target.classList.contains("delete-btn")) return;
+          loadSessionMessages(session.id);
+        });
 
-        loadSessionMessages(session.id);
+        sessionList.appendChild(li);
       });
-
-      sessionList.appendChild(li);
-    });
-  } catch (err) {
-    console.error("Failed to load sessions:", err.message);
+    } catch (err) {
+      console.error("Failed to load sessions:", err.message);
+    }
   }
-}
 
+  // --- Load messages for a session ---
+  async function loadSessionMessages(sessionId) {
+    currentSessionId = sessionId;
+    chatLog.innerHTML = "";
 
-// loadSessionMessages fetches and displays messages for a given session
-// loadSessionMessages fetches and displays messages for a given session
-async function loadSessionMessages(sessionId) {
-  currentSessionId = sessionId;
-  chatLog.innerHTML = "";
-
-  try {
-    // 1) Load existing messages from DB first
-    const res = await fetch(`/api/session/${sessionId}/messages/`, {
-      method: "GET",
-      credentials: "same-origin"
-    });
-
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-
-    if (data.messages && data.messages.length > 0) {
-      // There are saved messages: show them (don't re-initialize/chat-start)
-      data.messages.forEach(msg => {
-        appendMessage(msg.role, msg.text);
+    try {
+      const res = await fetch(`/api/session/${sessionId}/messages/`, {
+        method: "GET",
+        credentials: "same-origin"
       });
-      return;
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+
+      if (data.messages && data.messages.length > 0) {
+        data.messages.forEach(msg => {
+          appendMessage(msg.role, msg.text);
+        });
+        return;
+      }
+
+      const initRes = await fetch("{% url 'api_init' %}", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrftoken
+        },
+        credentials: "same-origin",
+        body: JSON.stringify({ session_id: sessionId })
+      });
+      if (!initRes.ok) {
+        const errText = await initRes.text();
+        appendMessage("model", "Error initializing chat: " + errText);
+        return;
+      }
+
+      const initData = await initRes.json();
+      appendMessage("model", initData.model_text || "(no text)");
+    } catch (err) {
+      appendMessage("model", "Error loading chat: " + err.message);
     }
-
-    // 2) No DB messages -> ask backend for the initial assistant reply for this session
-    //    (api_init returns the LLM's initial message; it does not create DB sessions)
-    const initRes = await fetch("{% url 'api_init' %}", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ session_id: sessionId })
-    });
-
-    if (!initRes.ok) {
-      const errText = await initRes.text();
-      appendMessage("model", "Error initializing chat: " + errText);
-      return;
-    }
-
-    const initData = await initRes.json();
-    // Show LLM first message (fallback to friendly text)
-    appendMessage("model", initData.model_text || "(no text)");
-
-    // NOTE: if api_new_session already saved the first messages to DB, the above DB fetch would have returned them.
-    // This branch handles the case where DB is empty but we still want the LLM's initial reply shown.
-  } catch (err) {
-    appendMessage("model", "Error loading chat: " + err.message);
   }
-}
 
-
-
-
-
-
-
+  // Kick off initial chat load
+  initializeChat();
 </script>
 {% endblock %}

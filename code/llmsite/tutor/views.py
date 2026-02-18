@@ -1,4 +1,3 @@
-# code/llmsite/tutor/views.py
 from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
@@ -13,6 +12,7 @@ from django.utils.text import get_valid_filename
 from .forms import SignupForm, UploadRagForm
 import json
 import os
+import re
 
 from languagemodel import InitModel, StartChat, SendMessage
 from languagemodel_legacy import *
@@ -28,6 +28,7 @@ CHAT_REGISTRY = {}
 model = None
 tokenizer = None
 gemini = None
+
 
 def ensure_llm_initialized():
     """
@@ -70,6 +71,48 @@ def _session_id(request):
     return request.session.session_key
 
 
+def _try_extract_quiz_json(text: str):
+    """
+    Robustly extract JSON quiz object from model text.
+    Handles fenced code blocks and extraneous surrounding text.
+    Returns a normalized dict like {"test": {...}} or None.
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    # If text contains a fenced ```json or ``` block, prefer content inside the fences
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+    candidate = m.group(1) if m else text
+
+    # Extract the largest {...} substring (in case the model included surrounding commentary)
+    brace_match = re.search(r"\{[\s\S]*\}", candidate)
+    if not brace_match:
+        return None
+    json_text = brace_match.group(0)
+
+    try:
+        obj = json.loads(json_text)
+    except Exception:
+        # Try a relaxed replacement of single quotes -> double quotes and remove trailing commas
+        jt = json_text.replace("'", '"')
+        jt = re.sub(r",\s*([}\]])", r"\1", jt)
+        try:
+            obj = json.loads(jt)
+        except Exception:
+            return None
+
+    # Normalize: prefer object.test / quiz / questions or treat top-level q1/q2 keys as test
+    test = (obj.get("test") or obj.get("quiz") or obj.get("questions"))
+    if test and isinstance(test, dict):
+        return {"test": test}
+
+    keys = list(obj.keys())
+    if keys and any(k.lower().startswith("q") for k in keys):
+        return {"test": obj}
+
+    return None
+
+
 @login_required
 def landing_page(request):
     """
@@ -94,6 +137,7 @@ def landing_page(request):
     }
     
     return render(request, "landing.html", context)
+
 
 @login_required(login_url="login")
 def chat_page(request):
@@ -166,6 +210,7 @@ def dashboard_page(request):
 
     return render(request, "dashboard_admin_mentor.html", context)
 
+
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
@@ -175,6 +220,7 @@ def curriculum_view(request, filename):
         raise Http404("File not found")
 
     return FileResponse(open(path, "rb"), as_attachment=False)
+
 
 @login_required
 @user_passes_test(is_admin)
@@ -189,6 +235,7 @@ def curriculum_delete(request):
 
     return redirect("dashboard")
 
+
 def signup(request):
     if request.method == "POST":
         form = SignupForm(request.POST)
@@ -199,6 +246,7 @@ def signup(request):
     else:
         form = SignupForm()
     return render(request, "signup.html", {"form": form})
+
 
 @require_http_methods(["POST"])
 @login_required
@@ -241,6 +289,7 @@ def account_create(request):
 
     return redirect("dashboard")
 
+
 @require_http_methods(["POST"])
 @login_required
 @user_passes_test(is_admin)
@@ -265,6 +314,7 @@ def account_delete(request):
     user.delete()
 
     return redirect("dashboard")
+
 
 @require_http_methods(["POST"])
 @login_required
@@ -300,6 +350,7 @@ def student_edit(request):
     student.save()
 
     return redirect("dashboard")
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -339,9 +390,7 @@ def api_new_session(request):
                 messages = [{"role": "assistant", "content": initial_msg}]
                 assistant_msg = initial_msg
         except Exception as e:
-            # Log but do NOT append an assistant error entry into messages/db.
             print(f"[api_new_session] Gemini initialization error: {e}")
-            # keep messages empty so nothing is persisted
             messages = []
             assistant_msg = "Model unavailable. Please try again later."
     else:
@@ -362,7 +411,7 @@ def api_new_session(request):
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = messages
 
-    # persist messages to DB **only if there are real messages** (i.e. no init-error placeholders)
+    # persist messages to DB
     for m in messages:
         role = m.get("role")
         content = m.get("content")
@@ -413,7 +462,6 @@ def api_init(request):
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
-        # store the live chat object (only real messages)
         CHAT_REGISTRY[sid] = messages
         return JsonResponse({"ok": True, "model_text": assistant_msg})
     else:
@@ -435,7 +483,7 @@ def api_init(request):
         return JsonResponse({"ok": True, "model_text": assistant_msg})
 
 
-@csrf_exempt
+#@csrf_exempt
 @require_http_methods(["POST"])
 def api_chat(request):
     try:
@@ -452,7 +500,6 @@ def api_chat(request):
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
 
-    # Ensure LLM/Gemini ready
     ensure_llm_initialized()
 
     assistant_reply_text = None
@@ -467,9 +514,7 @@ def api_chat(request):
         else:
             try:
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
-                # Update registry with the messages returned by SendMessage (these are real model outputs)
                 CHAT_REGISTRY[sid] = messages
-                # Extract assistant reply text
                 assistant_reply_text = reply.split("<|assistant|>")[-1].strip() if isinstance(reply, str) else None
                 if not assistant_reply_text and messages:
                     assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
@@ -486,8 +531,34 @@ def api_chat(request):
                 except Exception:
                     gemini = None
             if gemini:
-                # assume SendMessage(gemini, msg) returns a text assistant reply (legacy helper)
                 assistant_reply_text = SendMessage(gemini, msg)
+
+                # Debug log
+                print("=== Gemini reply in api_chat ===")
+                print(assistant_reply_text)
+                print("=== End Gemini reply ===")
+
+                # NEW: if this looks like a quiz JSON, create/replace active Quiz for this session
+                try:
+                    quiz_json = _try_extract_quiz_json(assistant_reply_text)
+                    print("Parsed quiz_json:", repr(quiz_json))
+                    if quiz_json:
+                        session_id = request.session.get("session_id")
+                        print("session_id for quiz:", session_id)
+                        if session_id:
+                            try:
+                                session = Session.objects.get(id=session_id, owner=request.user)
+                                Quiz.objects.filter(session=session, status="active").update(status="submitted")
+                                Quiz.objects.create(
+                                    session=session,
+                                    status="active",
+                                    quiz_json=quiz_json,
+                                )
+                                print("Created Quiz for session", session_id)
+                            except Exception as qe:
+                                print(f"[api_chat] Failed to create Quiz object: {qe}")
+                except Exception as qe_outer:
+                    print(f"[api_chat] Quiz JSON parse error: {qe_outer}")
             else:
                 assistant_reply_text = "Model unavailable. Please try again later."
                 error_occurred = True
@@ -496,7 +567,6 @@ def api_chat(request):
             assistant_reply_text = "Model error, please try again later."
             error_occurred = True
 
-        # Only append user + assistant to in-memory registry if the assistant reply is a normal text (no init error)
         existing = CHAT_REGISTRY.get(sid)
         if not isinstance(existing, list):
             existing = []
@@ -510,20 +580,16 @@ def api_chat(request):
         session_id = request.session.get("session_id")
         if session_id:
             session = Session.objects.get(id=session_id, owner=request.user)
-            # Always persist the user message
             DBChat.objects.create(session=session, role="user", message=msg)
-            # Persist assistant message only when model returned a real reply (no error)
             if not error_occurred and assistant_reply_text:
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
 
-            # Refresh progress periodically (every 5th user message)
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
                 calculate_student_progress(request.user)
     except Exception as e:
         print(f"Chat persistence or progress calc error: {e}")
 
-    # If error_occurred, include an 'error' flag so frontend can show it without inserting into history.
     if error_occurred:
         return JsonResponse({"ok": True, "model_text": assistant_reply_text, "error": True})
     else:
@@ -537,20 +603,16 @@ def api_reset(request):
     CHAT_REGISTRY.pop(sid, None)
     return JsonResponse({"ok": True})
 
+
 @login_required
 @require_http_methods(["GET"])
 def progress_summary(request):
     """
     API endpoint to fetch student progress summary.
-    Returns: overall completion %, current module, last activity, streak, and next step.
     """
     user = request.user
-    
-    # Recalculate progress for current user
     metrics = calculate_student_progress(user)
     
-    # Determine next recommended step
-    next_step = ""
     if metrics['total_sessions'] == 0:
         next_step = "Start your first chat session"
     elif metrics['total_quizzes'] == 0:
@@ -578,18 +640,14 @@ def progress_summary(request):
 def progress_detail(request):
     """
     Full progress dashboard with charts, history, and detailed metrics.
-    For students viewing their own progress or teachers viewing student progress.
     """
-    # Check if viewing as teacher/admin with student_id parameter
     student_id = request.GET.get('student_id')
     
     if student_id and is_teacher_or_admin(request.user):
-        # Teachers/admins can view student progress
         try:
             User = get_user_model()
             student_user = User.objects.get(id=student_id)
             
-            # Verify teacher has access to this student
             if not is_admin(request.user):
                 teacher_profile = TeacherProfile.objects.get(user=request.user)
                 student_profile = StudentProfile.objects.get(user=student_user)
@@ -600,19 +658,15 @@ def progress_detail(request):
         except (User.DoesNotExist, TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
             return JsonResponse({'error': 'Student not found'}, status=404)
     else:
-        # Students view their own progress
         target_user = request.user
     
-    # Recalculate progress
     metrics = calculate_student_progress(target_user)
     
-    # Get progress record for historical data
     try:
         progress = StudentProgress.objects.get(user=target_user)
     except StudentProgress.DoesNotExist:
         progress = None
     
-    # Get session history with quiz data
     sessions = Session.objects.filter(owner=target_user).order_by('-created_at')[:20]
     session_history = []
     
@@ -620,7 +674,6 @@ def progress_detail(request):
         quizzes = session.quizzes.filter(status='graded')
         quiz_count = quizzes.count()
         
-        # Calculate session quiz average
         session_quiz_avg = None
         if quiz_count > 0:
             quiz_scores = []
@@ -628,7 +681,7 @@ def progress_detail(request):
                 quiz_answer = quiz.answers.first()
                 if quiz_answer and quiz_answer.graded_json:
                     correct = sum(1 for item in quiz_answer.graded_json.values() 
-                                if isinstance(item, dict) and item.get('isCorrect'))
+                                  if isinstance(item, dict) and item.get('isCorrect'))
                     total = len(quiz_answer.graded_json)
                     if total > 0:
                         quiz_scores.append((correct / total) * 100)
@@ -681,6 +734,7 @@ def upload_curriculum(request):
 
     return redirect("dashboard")
 
+
 @login_required
 def api_list_sessions(request):
     """Return all sessions for the current user, or for a student if teacher/admin."""
@@ -731,13 +785,11 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
+
+    chats = DBChat.objects.filter(session=session).order_by("id")
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
-    # Also populate in-memory chat registry in the format the LLM functions expect:
-    llm_messages = []
-    for c in chats:
-        # DB stores role and message text; ensure keys are 'role' and 'content'
-        llm_messages.append({"role": c.role, "content": c.message})
+    llm_messages = [{"role": c.role, "content": c.message} for c in chats]
 
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = llm_messages
@@ -747,6 +799,7 @@ def api_session_messages(request, session_id):
         request.session['session_id'] = str(session.id)
 
     return JsonResponse({"ok": True, "messages": messages})
+
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -761,7 +814,6 @@ def api_session_init(request, session_id):
     except Session.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
-    # Start LLM chat and persist initial messages
     name = request.user.get_full_name() or request.user.username
     school = "George Washington High School"
     grade = "Sophomore"
@@ -772,30 +824,26 @@ def api_session_init(request, session_id):
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
 
-    # store in-memory
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = messages
 
-    # persist messages to DB
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
         if content:
             DBChat.objects.create(session=session, role=role, message=content)
 
-    # set server session pointer
     request.session['session_id'] = str(session.id)
 
-    # return assistant first message
     assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), None)
     return JsonResponse({"ok": True, "model_text": assistant_msg or "Hello!"})
+
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
 @login_required
 def api_delete_session(request, session_id):
     session = get_object_or_404(Session, id=session_id, owner=request.user)
-    # remove in-memory chat if present
     CHAT_REGISTRY.pop(str(session_id), None)
     session.delete()
     return JsonResponse({"ok": True, "status": "deleted"})
@@ -832,14 +880,10 @@ def api_select_session(request, session_id):
     except Session.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
-    # set server-side session id so api_chat knows which DB session to attach to
     request.session['session_id'] = str(session.id)
 
-    # rebuild messages list for in-memory chat registry
     chats = DBChat.objects.filter(session=session).order_by('id')
-    messages = []
-    for c in chats:
-        messages.append({"role": c.role, "content": c.message})
+    messages = [{"role": c.role, "content": c.message} for c in chats]
 
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = messages
@@ -884,10 +928,11 @@ def api_grade_quiz(request):
     
     total_points = 0.0
     earned_points = 0.0
-    results = []
+    graded = {}  # map qid -> feedback
 
     for idx, (qid, qdata) in enumerate(q_items):
         correct = qdata.get("correct")
+        answers_list = qdata.get("answers") or []
 
         try:
             possible = float(qdata.get("points", 1))
@@ -897,11 +942,54 @@ def api_grade_quiz(request):
         total_points += possible
         user_ans = answers[idx] if idx < len(answers) else ""
 
-        is_correct = str(user_ans).strip() == str(correct).strip()
-        feedback = "correct" if is_correct else f"incorrect: Answer was {str(correct).strip()}"
+        # Normalize strings
+        user_ans_str = str(user_ans).strip()
+        correct_str = str(correct).strip()
+
+        is_correct = False
+        # If both look numeric, compare user's 1-based to model's 0-based index
+        if re.match(r'^\d+$', user_ans_str) and re.match(r'^\d+$', correct_str):
+            try:
+                is_correct = (int(user_ans_str) - 1) == int(correct_str)
+            except Exception:
+                is_correct = False
+        else:
+            # fallback string comparison
+            is_correct = user_ans_str.lower() == correct_str.lower()
+
+        # Prepare human-friendly correct answer display
+        correct_display = correct_str
+        if re.match(r'^\d+$', correct_str):
+            try:
+                ci = int(correct_str)
+                if 0 <= ci < len(answers_list):
+                    correct_display = answers_list[ci]
+                else:
+                    correct_display = correct_str
+            except Exception:
+                correct_display = correct_str
+
+        # Also show what the user selected (if numeric convert to answer text)
+        user_display = user_ans_str
+        if re.match(r'^\d+$', user_ans_str):
+            try:
+                ui = int(user_ans_str) - 1
+                if 0 <= ui < len(answers_list):
+                    user_display = answers_list[ui]
+            except Exception:
+                pass
+
+        if is_correct:
+            feedback = "correct"
+        else:
+            # Provide a clearer explanation
+            if user_display:
+                feedback = f"incorrect: Your answer: {user_display}. Correct: {correct_display}"
+            else:
+                feedback = f"incorrect: Answer was {correct_display}"
 
         earned_points += possible if is_correct else 0
-        results.append(feedback)
+        graded[qid] = feedback
         
     quiz.possible_pts = total_points
     quiz.earned_pts = earned_points
@@ -909,11 +997,6 @@ def api_grade_quiz(request):
     quiz.ended_at = timezone.now()
     quiz.save(update_fields=["status", "possible_pts", "earned_pts", "ended_at"])
 
-    feedback_csv = ",".join([f'"{x}"' for x in results])
-
-    return JsonResponse({"ok": True, "model_text": feedback_csv})
-
-
-
-
-
+    # Return structured JSON (frontend will parse and display it)
+    feedback_json = json.dumps(graded)
+    return JsonResponse({"ok": True, "model_text": feedback_json})
