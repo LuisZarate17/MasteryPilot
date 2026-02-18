@@ -134,10 +134,31 @@ def dashboard_page(request):
     if os.path.exists(settings.CURRICULUM_ROOT):
         files = sorted(os.listdir(settings.CURRICULUM_ROOT))
 
+    # Get intervention list
+    intervention_list = []
+    intervention_alert = False
+    for student in students:
+        progress = StudentProgress.objects.filter(user=student.user).first()
+        if progress is None:
+            continue
+
+        if progress.quiz_average is None:
+            continue
+
+        if progress.quiz_average < 70.0:
+            if progress.quiz_average < 50.0:
+                intervention_list.append((student, 1))
+                intervention_alert = True
+            else:
+                intervention_list.append((student, 0))
+                
+
     context = {
+        "intervention_alert": intervention_alert,
         "teachers": teachers,
         "admins": admins,
         "students": students,
+        "intervention_list": intervention_list,
         "curriculum_files": files,
         "is_admin": is_admin_flag,
         "is_teacher": is_teacher_flag,
