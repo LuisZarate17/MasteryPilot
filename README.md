@@ -61,8 +61,6 @@ GEMINI_API_KEY="your-api-key-here"
 
 - Tutor requires internet access to use the Gemini API.
 - Using a local LLM is not yet implemented (#5).
-- Role-based access and teacher monitoring are not yet available (#3, #12).
-- quizzes may require manual correction for complex short answers.
 - All issues are tracked in GitHub, see the Incomplete Issues/User Stories section in the sprint report.
 
 
@@ -76,12 +74,13 @@ GEMINI_API_KEY="your-api-key-here"
 
 ## Additional Documentation
 
-- [Sprint 1 Report](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/SPRINT-1-REPORT.md) – Overview of work completed and unfinished work.
+- [Sprint 4 Report](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/docs/Reports/Sprint-4%20report.md) – Sprint 4 latest overview of work completed and unfinished work.
 - [GitHub Issues](https://github.com/Zelefant/CPTS421-AI-Tutor/issues) - Current issues, user stories, and progress tracking.
 
 ## License
 
 [See License](LICENSE.txt)
+
 
 
 
