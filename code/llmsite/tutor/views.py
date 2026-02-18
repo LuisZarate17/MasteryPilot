@@ -130,9 +130,14 @@ def landing_page(request):
         # First time user - calculate initial progress
         calculate_student_progress(request.user)
         progress = StudentProgress.objects.get(user=request.user)
-    
+        
+    quiz_avg = None
+    if progress.quiz_average:
+        quiz_avg = progress.quiz_average * 100
+
     context = {
         'progress': progress,
+        'quiz_avg': quiz_avg,
         'has_activity': progress.total_sessions > 0 or progress.total_quizzes > 0,
     }
     
@@ -189,8 +194,8 @@ def dashboard_page(request):
         if progress.quiz_average is None:
             continue
 
-        if progress.quiz_average < 70.0:
-            if progress.quiz_average < 50.0:
+        if progress.quiz_average < 0.7:
+            if progress.quiz_average < 0.5:
                 intervention_list.append((student, 1))
                 intervention_alert = True
             else:
@@ -785,8 +790,6 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-
-    chats = DBChat.objects.filter(session=session).order_by("id")
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
     llm_messages = [{"role": c.role, "content": c.message} for c in chats]
