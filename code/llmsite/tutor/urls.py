@@ -6,12 +6,13 @@ from .views import (
     dashboard_page, account_create, account_delete, student_edit, 
     upload_curriculum, curriculum_delete, curriculum_view,
     api_session_messages, api_delete_session, api_list_sessions, api_rename_session,
-    landing_page, progress_summary, progress_detail
+    landing_page, progress_summary, progress_detail, chat_history
 )
 
 urlpatterns = [
     path("", landing_page, name="landing"),
     path("chat/", chat_page, name="chat"),
+    path("chat/history/", chat_history, name="chat_history"),
     path("signup/", signup, name="signup"),
     path("dashboard/", dashboard_page, name="dashboard"),
     path("progress/", progress_detail, name="progress_detail"),

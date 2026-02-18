@@ -100,7 +100,7 @@
                         type="button"
                         class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 chat-history-btn"
                         data-role="student"
-                        data-student-id="{{ s.id }}"
+                        data-student-id="{{ s.user.id }}"
                         data-classes="{{ s.classes|default_if_none:''|escapejs }}"
                         data-teacher-id="{{ s.teacher.id|default:'' }}">
                         Chat History
@@ -822,6 +822,16 @@
     btn.addEventListener("click", () => {
       const userId = btn.dataset.userId;
       const url = `/progress/?student_id=${encodeURIComponent(userId)}`;
+      window.location.href = url;
+    });
+  })
+
+  // Chat History Button Logic
+  const viewChatHistoryBtns = document.querySelectorAll(".chat-history-btn")
+  viewChatHistoryBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const userId = btn.dataset.studentId;
+      const url = `/chat/history/?student_id=${encodeURIComponent(userId)}`;
       window.location.href = url;
     });
   })

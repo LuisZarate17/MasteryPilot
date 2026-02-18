@@ -101,6 +101,11 @@ def chat_page(request):
         return redirect("dashboard")
     return render(request, "chat.html")
 
+@login_required(login_url="login")
+@user_passes_test(is_teacher_or_admin)
+def chat_history(request):
+    return render(request, "chat_history.html")
+
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def dashboard_page(request):
@@ -657,24 +662,54 @@ def upload_curriculum(request):
 
 @login_required
 def api_list_sessions(request):
-    """Return all sessions for the current user."""
-    sessions = Session.objects.filter(owner=request.user).order_by("-created_at")
-    data = [
-        {"id": str(s.id), "title": s.title, "created_at": s.created_at.isoformat()}
-        for s in sessions
-    ]
+    """Return all sessions for the current user, or for a student if teacher/admin."""
+    if not is_teacher_or_admin(request.user):
+        sessions = Session.objects.filter(owner=request.user).order_by("-created_at")
+    else:
+        student_id_raw = request.GET.get("student_id")
+        try:
+            student_id = int(student_id_raw)
+        except (TypeError, ValueError):
+            return JsonResponse({"sessions": []})
+
+        sessions = Session.objects.filter(owner_id=student_id).order_by("-created_at")
+
+    print("api_list_sessions user=", request.user.username, "is_teacher=", is_teacher_or_admin(request.user), "GET=", dict(request.GET))
+    data = [{"id": str(s.id), "title": s.title, "created_at": s.created_at.isoformat()} for s in sessions]
     return JsonResponse({"sessions": data})
+
+    
 
 
 @login_required
 @require_GET
 def api_session_messages(request, session_id):
     try:
-        session = Session.objects.get(id=session_id, owner=request.user)
+        session = Session.objects.select_related("owner").get(id=session_id)
     except Session.DoesNotExist:
         return HttpResponseBadRequest("Session not found or not owned by user")
+    
+    allowed = False
 
-    chats = DBChat.objects.filter(session=session).order_by("id")  # keep chronological order
+    if session.owner_id == request.user.id:
+        allowed = True
+    elif is_teacher_or_admin(request.user):
+        allowed = True
+        # Non-admin teachers must be assigned to that student
+        if not is_admin(request.user):
+            try:
+                teacher_profile = TeacherProfile.objects.get(user=request.user)
+                student_profile = StudentProfile.objects.get(user=session.owner)
+            except (TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
+                return JsonResponse({"error": "Access denied"}, status=403)
+
+            if student_profile.teacher_id != teacher_profile.id:
+                return JsonResponse({"error": "Access denied"}, status=403)
+
+    if not allowed:
+        return JsonResponse({"error": "Access denied"}, status=403)
+
+    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
     # Also populate in-memory chat registry in the format the LLM functions expect:
@@ -687,7 +722,8 @@ def api_session_messages(request, session_id):
     CHAT_REGISTRY[sid] = llm_messages
 
     # set the active session for subsequent api_chat persistence
-    request.session['session_id'] = str(session.id)
+    if not is_teacher_or_admin(request.user):
+        request.session['session_id'] = str(session.id)
 
     return JsonResponse({"ok": True, "messages": messages})
 
