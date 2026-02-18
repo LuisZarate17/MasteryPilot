@@ -17,7 +17,7 @@ import re
 from languagemodel import InitModel, StartChat, SendMessage
 from languagemodel_legacy import *
 from httpx import request
-from .models import Quiz, Session, Chat as DBChat, StudentProgress
+from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile
 from tutor.globals import GetModelAndTokenizer
@@ -763,12 +763,60 @@ def api_session_messages(request, session_id):
     if not allowed:
         return JsonResponse({"error": "Access denied"}, status=403)
 
-    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-
     chats = DBChat.objects.filter(session=session).order_by("id")
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
     llm_messages = [{"role": c.role, "content": c.message} for c in chats]
+
+    quiz_attempts = []
+    quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
+    for quiz in quizzes:
+        quiz_answer = quiz.answers.order_by("-submitted_at").first()
+        test = (quiz.quiz_json or {}).get("test") or {}
+        items = []
+        if isinstance(test, dict):
+            for qid, qdata in test.items():
+                qdata = qdata or {}
+                answers_list = qdata.get("answers") or []
+                correct_raw = str(qdata.get("correct", "")).strip()
+
+                correct_display = correct_raw
+                if re.match(r'^\d+$', correct_raw):
+                    ci = int(correct_raw)
+                    if 0 <= ci < len(answers_list):
+                        correct_display = str(answers_list[ci])
+
+                user_raw = ""
+                user_display = ""
+                is_correct = None
+
+                if quiz_answer:
+                    answers_json = quiz_answer.answers_json or {}
+                    graded_json = quiz_answer.graded_json or {}
+                    user_raw = str(answers_json.get(qid, "")).strip()
+                    user_display = user_raw
+                    if re.match(r'^\d+$', user_raw):
+                        ui = int(user_raw) - 1
+                        if 0 <= ui < len(answers_list):
+                            user_display = str(answers_list[ui])
+
+                    grade_item = graded_json.get(qid)
+                    if isinstance(grade_item, dict) and "isCorrect" in grade_item:
+                        is_correct = bool(grade_item.get("isCorrect"))
+
+                items.append({
+                    "qid": qid,
+                    "student_answer": user_display,
+                    "correct_answer": correct_display,
+                    "is_correct": is_correct,
+                })
+
+        quiz_attempts.append({
+            "quiz_id": str(quiz.id),
+            "status": quiz.status,
+            "has_submission": quiz_answer is not None,
+            "items": items,
+        })
 
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = llm_messages
@@ -777,7 +825,7 @@ def api_session_messages(request, session_id):
     if not is_teacher_or_admin(request.user):
         request.session['session_id'] = str(session.id)
 
-    return JsonResponse({"ok": True, "messages": messages})
+    return JsonResponse({"ok": True, "messages": messages, "quiz_attempts": quiz_attempts})
 
 
 @csrf_exempt
@@ -907,7 +955,9 @@ def api_grade_quiz(request):
     
     total_points = 0.0
     earned_points = 0.0
-    graded = {}  # map qid -> feedback
+    graded_feedback = {}  # qid -> message (for frontend modal)
+    graded_json = {}      # qid -> structured grading (for persistence/analytics)
+    answers_json = {}     # qid -> raw submitted answer token
 
     for idx, (qid, qdata) in enumerate(q_items):
         correct = qdata.get("correct")
@@ -961,14 +1011,19 @@ def api_grade_quiz(request):
         if is_correct:
             feedback = "correct"
         else:
-            # Provide a clearer explanation
             if user_display:
                 feedback = f"incorrect: Your answer: {user_display}. Correct: {correct_display}"
             else:
                 feedback = f"incorrect: Answer was {correct_display}"
 
         earned_points += possible if is_correct else 0
-        graded[qid] = feedback
+        graded_feedback[qid] = feedback
+        graded_json[qid] = {
+            "isCorrect": is_correct,
+            "studentAnswer": user_display,
+            "correctAnswer": correct_display,
+        }
+        answers_json[qid] = user_ans_str
         
     quiz.possible_pts = total_points
     quiz.earned_pts = earned_points
@@ -976,6 +1031,12 @@ def api_grade_quiz(request):
     quiz.ended_at = timezone.now()
     quiz.save(update_fields=["status", "possible_pts", "earned_pts", "ended_at"])
 
+    QuizAnswer.objects.create(
+        quiz=quiz,
+        answers_json=answers_json,
+        graded_json=graded_json,
+    )
+
     # Return structured JSON (frontend will parse and display it)
-    feedback_json = json.dumps(graded)
+    feedback_json = json.dumps(graded_feedback)
     return JsonResponse({"ok": True, "model_text": feedback_json})

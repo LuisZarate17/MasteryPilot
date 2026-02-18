@@ -60,6 +60,8 @@
   const quizFeedbackContent = document.getElementById("quizFeedbackContent");
   const closeQuizFeedback = document.getElementById("closeQuizFeedback");
   let currentSessionId = null;
+  let quizAttempts = [];
+  let quizAttemptIndex = 0;
 
   let quizActive = false;
 
@@ -77,13 +79,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 });
 
-function appendMessage(role, text) {
+function appendMessage(role, text, quizAttempt = null) {
   const div = document.createElement("div");
   div.className = role === "user" ? "flex gap-3 justify-end" : "flex gap-3";
   if (role === "user") {
     div.innerHTML = `<div class='bg-brand-600 text-white rounded-2xl px-4 py-2 max-w-[75%]'>${escapeHtml(text || "")}</div>`;
   } else {
-    const rendered = formatTeacherMessage(text || "");
+    const rendered = formatTeacherMessage(text || "", quizAttempt);
     div.innerHTML = `<div class='h-8 w-8 rounded-full bg-brand-600 shrink-0'></div>
       <div class='bg-gray-100 rounded-2xl px-4 py-2 max-w-[75%]'>${rendered}</div>`;
   }
@@ -91,13 +93,21 @@ function appendMessage(role, text) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-function formatTeacherMessage(text) {
+function formatTeacherMessage(text, quizAttempt) {
   const quizObj = parseQuizJson(text);
   if (!quizObj) return escapeHtml(text);
-  return renderReadOnlyQuiz(quizObj);
+  return renderReadOnlyQuiz(quizObj, quizAttempt);
 }
 
-function renderReadOnlyQuiz(quizObj) {
+function renderReadOnlyQuiz(quizObj, quizAttempt) {
+  const attemptMap = new Map();
+  if (quizAttempt && Array.isArray(quizAttempt.items)) {
+    quizAttempt.items.forEach(item => {
+      if (!item || !item.qid) return;
+      attemptMap.set(String(item.qid), item);
+    });
+  }
+
   let html = `<div class="space-y-3">`;
   html += `<div class="font-semibold text-gray-900">Quiz (read only)</div>`;
 
@@ -107,6 +117,9 @@ function renderReadOnlyQuiz(quizObj) {
     const question = qdata.question || `Question ${idx + 1}`;
     const qType = (qdata.type || "").toLowerCase();
     const correct = String(qdata.correct ?? "").trim();
+    const attempt = attemptMap.get(String(qid));
+    const studentAnswer = attempt && attempt.student_answer ? String(attempt.student_answer) : "";
+    const isCorrect = attempt && typeof attempt.is_correct === "boolean" ? attempt.is_correct : null;
 
     html += `<div class="rounded-xl border border-gray-200 bg-white p-3 space-y-2">`;
     html += `<div class="text-sm font-semibold text-gray-900">${idx + 1}. ${escapeHtml(question)}</div>`;
@@ -116,15 +129,30 @@ function renderReadOnlyQuiz(quizObj) {
       qdata.answers.forEach((ans, i) => {
         const choiceText = String(ans ?? "");
         const choiceNumber = String(i + 1);
-        const isCorrect = correct === choiceNumber || correct.toLowerCase() === choiceText.trim().toLowerCase();
-        html += `<li class="rounded-md px-2 py-1 text-sm ${isCorrect ? "bg-green-100 text-green-800 border border-green-300" : "text-gray-700"}">`;
+        const isRightChoice = correct === choiceNumber || correct.toLowerCase() === choiceText.trim().toLowerCase();
+        const isStudentChoice = studentAnswer && studentAnswer.trim().toLowerCase() === choiceText.trim().toLowerCase();
+        const liClass = isRightChoice
+          ? "bg-green-100 text-green-800 border border-green-300"
+          : (isStudentChoice ? "bg-blue-100 text-blue-800 border border-blue-300" : "text-gray-700");
+        html += `<li class="rounded-md px-2 py-1 text-sm ${liClass}">`;
         html += `${escapeHtml(choiceNumber)}. ${escapeHtml(choiceText)}`;
-        if (isCorrect) html += ` <span class="ml-1 font-semibold">(Correct answer)</span>`;
+        if (isRightChoice) html += ` <span class="ml-1 font-semibold">(Correct answer)</span>`;
+        if (isStudentChoice && !isRightChoice) html += ` <span class="ml-1 font-semibold">(Student answer)</span>`;
+        if (isStudentChoice && isRightChoice) html += ` <span class="ml-1 font-semibold">(Student answered this)</span>`;
         html += `</li>`;
       });
       html += `</ul>`;
     } else {
       html += `<div class="text-sm text-gray-700">Correct answer: <span class="font-semibold text-green-700">${escapeHtml(correct || "N/A")}</span></div>`;
+    }
+
+    if (attempt && attempt.has_submission) {
+      html += `<div class="text-sm text-gray-700">Student answer: <span class="font-semibold ${isCorrect === true ? "text-green-700" : (isCorrect === false ? "text-red-700" : "text-gray-800")}">${escapeHtml(studentAnswer || "No answer")}</span></div>`;
+      if (isCorrect === true) {
+        html += `<div class="text-xs font-semibold text-green-700">Result: Correct</div>`;
+      } else if (isCorrect === false) {
+        html += `<div class="text-xs font-semibold text-red-700">Result: Incorrect</div>`;
+      }
     }
 
     html += `</div>`;
@@ -245,6 +273,8 @@ async function loadSessions() {
 async function loadSessionMessages(sessionId) {
   currentSessionId = sessionId;
   chatLog.innerHTML = "";
+  quizAttempts = [];
+  quizAttemptIndex = 0;
 
   try {
     // 1) Load existing messages from DB first
@@ -255,11 +285,20 @@ async function loadSessionMessages(sessionId) {
 
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
+    quizAttempts = Array.isArray(data.quiz_attempts) ? data.quiz_attempts : [];
 
     if (data.messages && data.messages.length > 0) {
       // There are saved messages: show them (don't re-initialize/chat-start)
       data.messages.forEach(msg => {
-        appendMessage(msg.role, msg.text);
+        let attempt = null;
+        if (msg.role !== "user") {
+          const quizObj = parseQuizJson(msg.text || "");
+          if (quizObj && quizAttemptIndex < quizAttempts.length) {
+            attempt = quizAttempts[quizAttemptIndex];
+            quizAttemptIndex += 1;
+          }
+        }
+        appendMessage(msg.role, msg.text, attempt);
       });
       return;
     }
