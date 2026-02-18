@@ -130,9 +130,14 @@ def landing_page(request):
         # First time user - calculate initial progress
         calculate_student_progress(request.user)
         progress = StudentProgress.objects.get(user=request.user)
-    
+        
+    quiz_avg = None
+    if progress.quiz_average:
+        quiz_avg = progress.quiz_average * 100
+
     context = {
         'progress': progress,
+        'quiz_avg': quiz_avg,
         'has_activity': progress.total_sessions > 0 or progress.total_quizzes > 0,
     }
     
@@ -178,10 +183,31 @@ def dashboard_page(request):
     if os.path.exists(settings.CURRICULUM_ROOT):
         files = sorted(os.listdir(settings.CURRICULUM_ROOT))
 
+    # Get intervention list
+    intervention_list = []
+    intervention_alert = False
+    for student in students:
+        progress = StudentProgress.objects.filter(user=student.user).first()
+        if progress is None:
+            continue
+
+        if progress.quiz_average is None:
+            continue
+
+        if progress.quiz_average < 0.7:
+            if progress.quiz_average < 0.5:
+                intervention_list.append((student, 1))
+                intervention_alert = True
+            else:
+                intervention_list.append((student, 0))
+                
+
     context = {
+        "intervention_alert": intervention_alert,
         "teachers": teachers,
         "admins": admins,
         "students": students,
+        "intervention_list": intervention_list,
         "curriculum_files": files,
         "is_admin": is_admin_flag,
         "is_teacher": is_teacher_flag,
@@ -763,7 +789,7 @@ def api_session_messages(request, session_id):
     if not allowed:
         return JsonResponse({"error": "Access denied"}, status=403)
 
-    chats = DBChat.objects.filter(session=session).order_by("id")
+    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
     llm_messages = [{"role": c.role, "content": c.message} for c in chats]

@@ -52,8 +52,8 @@
         <div class="bg-gray-50 rounded-lg p-4">
           <div class="text-xs font-medium text-gray-500 uppercase mb-1">Quiz Average</div>
           <div class="text-sm font-semibold text-gray-900">
-            {% if progress.quiz_average %}
-              {{ progress.quiz_average|floatformat:1 }}%
+            {% if quiz_avg %}
+              {{ quiz_avg|floatformat:1 }}%
             {% else %}
               No quizzes yet
             {% endif %}
