@@ -830,7 +830,6 @@ def api_grade_quiz(request):
     results = []
 
     for idx, (qid, qdata) in enumerate(q_items):
-        qtype = (qdata.get("type") or "").strip()
         correct = qdata.get("correct")
 
         try:

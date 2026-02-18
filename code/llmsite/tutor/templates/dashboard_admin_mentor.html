@@ -814,5 +814,17 @@
       editStudentModal.classList.add("hidden");
     }
   });
+
+  // View Progress Button Logic
+  const progressBtns = document.querySelectorAll(".view-progress-btn");
+
+  progressBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const userId = btn.dataset.userId;
+      const url = `/progress/?student_id=${encodeURIComponent(userId)}`;
+      window.location.href = url;
+    });
+  })
+
 </script>
 {% endblock %}
