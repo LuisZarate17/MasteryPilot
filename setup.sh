@@ -5,6 +5,7 @@ set -euo pipefail
 APP_NAME="llmsite"
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="${APP_DIR}/.venv"
+PROJECT_DIR="${APP_DIR}/code/llmsite"
 
 ENV_DIR="/etc/${APP_NAME}"
 ENV_FILE="${ENV_DIR}/${APP_NAME}.env"
@@ -14,13 +15,13 @@ WSGI_MODULE="llmsite.wsgi:application"
 
 BIND_HOST="0.0.0.0"
 BIND_PORT="8000"
-WORKERS="2"
-TIMEOUT="60"
+WORKERS="1"
+TIMEOUT="300"
 ### =======================================
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
-    echo "Run as root: sudo ./deploy.sh"
+    echo "Run as root: sudo ./setup.sh"
     exit 1
   fi
 }
@@ -28,6 +29,11 @@ need_root() {
 echo_step() { echo; echo "==> $1"; }
 
 need_root
+
+if [[ ! -f "${PROJECT_DIR}/manage.py" ]]; then
+  echo "Could not find Django project at: ${PROJECT_DIR}"
+  exit 1
+fi
 
 echo_step "Create venv and install requirements.txt"
 python3 -m venv "${VENV_DIR}"
@@ -66,12 +72,13 @@ source "${ENV_FILE}"
 set -u
 
 echo_step "Run migrations"
-"${VENV_DIR}/bin/python" "${APP_DIR}/manage.py" migrate --noinput
+"${VENV_DIR}/bin/python" "${PROJECT_DIR}/manage.py" migrate --noinput
 
 echo_step "Start server (gunicorn, foreground)"
 echo "Binding: ${BIND_HOST}:${BIND_PORT}"
 echo "Open from LAN: http://<SERVER_LAN_IP>:${BIND_PORT}"
 exec "${VENV_DIR}/bin/gunicorn" "${WSGI_MODULE}" \
+  --chdir "${PROJECT_DIR}" \
   --bind "${BIND_HOST}:${BIND_PORT}" \
   --workers "${WORKERS}" \
   --timeout "${TIMEOUT}"

@@ -50,6 +50,9 @@ def InitModel():
     model_id = os.getenv("LANGUAGE_MODEL_ID", "mistralai/Mistral-7B-Instruct-v0.3")
 
     cfg = AutoConfig.from_pretrained(model_id)
+    # Some published configs declare unexpected tied-weight mappings.
+    # Disabling embedding tying suppresses noisy non-fatal warnings.
+    cfg.tie_word_embeddings = False
     print("Loading model:", model_id)
     print("cfg.max_position_embeddings:", getattr(cfg, "max_position_embeddings", None))
 
@@ -61,18 +64,30 @@ def InitModel():
 
     if torch.cuda.is_available():
         dtype = torch.float16
-        device_map = "auto"
+        try:
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                config=cfg,
+                torch_dtype=dtype,
+                device_map="auto",
+            )
+        except ValueError as exc:
+            if "requires `accelerate`" not in str(exc):
+                raise
+            print("accelerate not found; retrying load without device_map")
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                config=cfg,
+                torch_dtype=dtype,
+            )
+            model.to("cuda")
     else:
         dtype = torch.float32
-        device_map = None
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=dtype,
-        device_map=device_map,
-    )
-
-    if device_map is None:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            config=cfg,
+            torch_dtype=dtype,
+        )
         model.to("cpu")
 
     model.eval()

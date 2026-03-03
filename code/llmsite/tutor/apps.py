@@ -1,6 +1,6 @@
 # code/llmsite/tutor/apps.py
 from django.apps import AppConfig
-from languagemodel import InitModel
+from languagemodel_mistral import InitModel
 
 class TutorConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
