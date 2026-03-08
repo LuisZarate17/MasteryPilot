@@ -375,9 +375,9 @@ def api_new_session(request):
 
     # Student info
     name   = request.user.get_full_name() or request.user.username
-    school = "George Washington High School"
-    grade  = "Sophomore"
-    classes = "Algebra 2, History, AP Language/Composition"
+    school = request.user.school
+    grade  = request.user.grade
+    classes = request.user.classes
 
     # Ensure LLM/Gemini is initialized
     ensure_llm_initialized()
