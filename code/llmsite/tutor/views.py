@@ -1,4 +1,4 @@
-from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
+from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest, HttpResponse
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods, require_GET
@@ -13,8 +13,8 @@ from .forms import SignupForm, UploadRagForm
 import json
 import os
 import re
+import csv
 
-from languagemodel_mistral import InitModel, StartChat, SendMessage
 #from languagemodel_legacy import *
 from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
@@ -29,6 +29,9 @@ model = None
 tokenizer = None
 gemini = None
 
+def _get_local_llm_fns():
+    from languagemodel_mistral import InitModel, StartChat, SendMessage
+    return InitModel, StartChat, SendMessage
 
 def ensure_llm_initialized():
     """
@@ -53,6 +56,7 @@ def ensure_llm_initialized():
             except Exception:
                 # Fall back to InitModel if GetModelAndTokenizer isn't ready
                 try:
+                    InitModel, _, _ = _get_local_llm_fns()
                     model, tokenizer = InitModel()
                     # If you want the globals module to know about them:
                     try:
@@ -70,6 +74,29 @@ def _session_id(request):
     if not request.session.session_key:
         request.session.save()
     return request.session.session_key
+
+
+def _split_full_name(full_name: str) -> tuple[str, str, str]:
+    cleaned = (full_name or "").strip()
+    if not cleaned:
+        return "", "", ""
+
+    parts = cleaned.split(None, 1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+    return cleaned, first_name, last_name
+
+
+def _display_name_for_user(user, explicit_name: str = "") -> str:
+    explicit = (explicit_name or "").strip()
+    if explicit:
+        return explicit
+
+    full_name = (user.get_full_name() or "").strip()
+    if full_name:
+        return full_name
+
+    return user.username
 
 
 def _try_extract_quiz_json(text: str):
@@ -262,6 +289,7 @@ def account_create(request):
 
     role = (request.POST.get("role") or "").strip()
     username = (request.POST.get("username") or "").strip()
+    full_name = (request.POST.get("full_name") or "").strip()
     email = (request.POST.get("email") or "").strip()
     password = request.POST.get("password") or ""
 
@@ -273,20 +301,27 @@ def account_create(request):
     
     if User.objects.filter(username=username).exists():
         return redirect("dashboard")
+
+    _, first_name, last_name = _split_full_name(full_name)
     
     user = User.objects.create_user(
         username=username,
         email=email,
         password=password,
+        first_name=first_name,
+        last_name=last_name,
     )
 
+    display_name = _display_name_for_user(user, full_name)
+
     if role == "teacher":
-        TeacherProfile.objects.create(user=user)
+        TeacherProfile.objects.create(user=user, display_name=display_name)
     elif role == "admin":
-        AdminProfile.objects.create(user=user)
+        AdminProfile.objects.create(user=user, display_name=display_name)
     elif role == "student":
         StudentProfile.objects.create(
             user=user,
+            display_name=display_name,
             grade=grade,
             classes=classes,
         )
@@ -409,6 +444,7 @@ def api_new_session(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
+                StartChat = _get_local_llm_fns()[1]
                 chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
                 assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
             except Exception as e:
@@ -464,6 +500,7 @@ def api_init(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
+                StartChat = _get_local_llm_fns()[1]
                 chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
                 assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
             except Exception as e:
@@ -524,6 +561,7 @@ def api_chat(request):
             error_occurred = True
         else:
             try:
+                SendMessage = _get_local_llm_fns()[2]
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
                 CHAT_REGISTRY[sid] = messages
                 assistant_reply_text = reply if isinstance(reply, str) else None
@@ -750,6 +788,127 @@ def upload_curriculum(request):
 
 
 @login_required
+@user_passes_test(is_teacher_or_admin)
+@require_GET
+def api_export_chats(request):
+    export_format = (request.GET.get("format") or "csv").strip().lower()
+    if export_format not in {"csv", "json"}:
+        return HttpResponseBadRequest("format must be csv or json")
+
+    student_id_raw = request.GET.get("student_id")
+    try:
+        student_id = int(student_id_raw)
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("student_id is required")
+
+    User = get_user_model()
+    try:
+        target_user = User.objects.get(id=student_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "Student not found"}, status=404)
+
+    try:
+        target_student = StudentProfile.objects.get(user=target_user)
+    except StudentProfile.DoesNotExist:
+        return JsonResponse({"error": "Student not found"}, status=404)
+
+    # Admins can export any student.
+    # Teachers can export only students assigned to them.
+    if not is_admin(request.user):
+        try:
+            teacher_profile = TeacherProfile.objects.get(user=request.user)
+        except TeacherProfile.DoesNotExist:
+            return JsonResponse({"error": "Access denied"}, status=403)
+
+        if target_student.teacher_id != teacher_profile.id:
+            return JsonResponse({"error": "Access denied"}, status=403)
+
+    sessions = list(
+        Session.objects.filter(owner=target_user).order_by("created_at", "id")
+    )
+    session_ids = [s.id for s in sessions]
+    chats = (
+        DBChat.objects
+        .filter(session_id__in=session_ids)
+        .select_related("session")
+        .order_by("session__created_at", "created_at", "id")
+    )
+
+    exported_at = timezone.now()
+    exported_at_iso = exported_at.isoformat()
+    timestamp = exported_at.strftime("%Y%m%d_%H%M%S")
+    safe_username = re.sub(r"[^A-Za-z0-9_-]", "_", target_user.username)
+    filename = f"chat_export_{safe_username}_{timestamp}.{export_format}"
+
+    if export_format == "csv":
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        writer = csv.writer(response)
+        writer.writerow([
+            "student_id",
+            "student_username",
+            "student_name",
+            "session_id",
+            "session_title",
+            "session_created_at",
+            "message_created_at",
+            "role",
+            "message",
+        ])
+
+        student_name = target_student.display_name or target_user.get_full_name() or target_user.username
+        for chat in chats:
+            writer.writerow([
+                target_user.id,
+                target_user.username,
+                student_name,
+                str(chat.session_id),
+                chat.session.title,
+                chat.session.created_at.isoformat(),
+                chat.created_at.isoformat(),
+                chat.role,
+                chat.message,
+            ])
+        return response
+
+    session_payload = {
+        str(s.id): {
+            "id": str(s.id),
+            "title": s.title,
+            "created_at": s.created_at.isoformat(),
+            "messages": [],
+        }
+        for s in sessions
+    }
+
+    for chat in chats:
+        session_payload[str(chat.session_id)]["messages"].append({
+            "id": str(chat.id),
+            "role": chat.role,
+            "text": chat.message,
+            "created_at": chat.created_at.isoformat(),
+        })
+
+    payload = {
+        "exported_at": exported_at_iso,
+        "student": {
+            "id": target_user.id,
+            "username": target_user.username,
+            "name": target_student.display_name or target_user.get_full_name() or target_user.username,
+            "email": target_user.email,
+        },
+        "sessions": list(session_payload.values()),
+    }
+
+    response = HttpResponse(
+        json.dumps(payload, indent=2),
+        content_type="application/json; charset=utf-8",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
+
+
+@login_required
 def api_list_sessions(request):
     """Return all sessions for the current user, or for a student if teacher/admin."""
     if not is_teacher_or_admin(request.user):
@@ -886,6 +1045,7 @@ def api_session_init(request, session_id):
         return JsonResponse({"ok": False, "error": "Model unavailable"}, status=503)
 
     try:
+        StartChat = _get_local_llm_fns()[1]
         chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
