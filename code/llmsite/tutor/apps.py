@@ -11,7 +11,24 @@ def _should_skip_llm_init() -> bool:
 
     # Covers `manage.py test ...` and common pytest runs.
     argv = [a.lower() for a in sys.argv]
-    return ("test" in argv) or any("pytest" in a for a in argv)
+    if ("test" in argv) or any("pytest" in a for a in argv):
+        return True
+
+    # Skip costly/nonessential LLM setup for maintenance commands.
+    management_commands = {
+        "migrate",
+        "makemigrations",
+        "showmigrations",
+        "collectstatic",
+        "check",
+        "shell",
+        "dbshell",
+        "createsuperuser",
+    }
+    if len(argv) > 1 and argv[1] in management_commands:
+        return True
+
+    return False
 
 class TutorConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
@@ -25,7 +42,7 @@ class TutorConfig(AppConfig):
 
         if _should_skip_llm_init():
             TutorConfig._llm_loaded = True
-            print("Skipping Gemini/LLM initialization for test run.")
+            print("Skipping Gemini/LLM initialization for management command.")
             return
 
         TutorConfig._llm_loaded = True

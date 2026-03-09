@@ -15,7 +15,6 @@ import os
 import re
 import csv
 
-from languagemodel_mistral import InitModel, StartChat, SendMessage
 #from languagemodel_legacy import *
 from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
@@ -30,6 +29,9 @@ model = None
 tokenizer = None
 gemini = None
 
+def _get_local_llm_fns():
+    from languagemodel_mistral import InitModel, StartChat, SendMessage
+    return InitModel, StartChat, SendMessage
 
 def ensure_llm_initialized():
     """
@@ -54,6 +56,7 @@ def ensure_llm_initialized():
             except Exception:
                 # Fall back to InitModel if GetModelAndTokenizer isn't ready
                 try:
+                    InitModel, _, _ = _get_local_llm_fns()
                     model, tokenizer = InitModel()
                     # If you want the globals module to know about them:
                     try:
@@ -441,6 +444,7 @@ def api_new_session(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
+                StartChat = _get_local_llm_fns()[1]
                 chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
                 assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
             except Exception as e:
@@ -496,6 +500,7 @@ def api_init(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
+                StartChat = _get_local_llm_fns()[1]
                 chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
                 assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
             except Exception as e:
@@ -556,6 +561,7 @@ def api_chat(request):
             error_occurred = True
         else:
             try:
+                SendMessage = _get_local_llm_fns()[2]
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
                 CHAT_REGISTRY[sid] = messages
                 assistant_reply_text = reply if isinstance(reply, str) else None
@@ -1039,6 +1045,7 @@ def api_session_init(request, session_id):
         return JsonResponse({"ok": False, "error": "Model unavailable"}, status=503)
 
     try:
+        StartChat = _get_local_llm_fns()[1]
         chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
