@@ -87,7 +87,7 @@
                 {% for s in students %}
                   <tr>
                     <td class="px-4 py-2">
-                      {{ s.user.get_full_name|default:s.user.username }}
+                      {{ s.display_name|default:s.user.get_full_name|default:s.user.username }}
                     </td>
                     <td class="px-4 py-2 text-gray-600">
                       {{ s.user.email }}
@@ -142,7 +142,7 @@
               {% for s, i in intervention_list %}
                 <tr>
                   <td class="px-4 py-2">
-                    {{ s.user.get_full_name|default:s.user.username }}
+                    {{ s.display_name|default:s.user.get_full_name|default:s.user.username }}
                   </td>
                   <td class="px-4 py-2 text-center text-gray-600">
                     {% if i == 0 %} Struggling {% elif i == 1 %} Failing {% endif %}
@@ -340,7 +340,7 @@
                 {% for t in teachers %}
                   <tr>
                     <td class="px-4 py-2">
-                      {{ t.user.get_full_name|default:t.user.username }}
+                      {{ t.display_name|default:t.user.get_full_name|default:t.user.username }}
                     </td>
                     <td class="px-4 py-2 text-gray-600">
                       {{ t.user.email }}
@@ -402,7 +402,7 @@
                 {% for a in admins %}
                   <tr>
                     <td class="px-4 py-2">
-                      {{ a.user.get_full_name|default:a.user.username }}
+                      {{ a.display_name|default:a.user.get_full_name|default:a.user.username }}
                     </td>
                     <td class="px-4 py-2 text-gray-600">
                       {{ a.user.email }}
@@ -465,7 +465,7 @@
                 {% for s in students %}
                   <tr>
                     <td class="px-4 py-2">
-                      {{ s.user.get_full_name|default:s.user.username }}
+                      {{ s.display_name|default:s.user.get_full_name|default:s.user.username }}
                     </td>
                     <td class="px-4 py-2 text-gray-600">
                       {{ s.user.email }}
@@ -531,6 +531,15 @@
           name="username"
           class="w-full rounded-lg border px-3 py-2 text-sm"
           required>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Full name</label>
+        <input
+          type="text"
+          name="full_name"
+          class="w-full rounded-lg border px-3 py-2 text-sm"
+          placeholder="Optional">
       </div>
 
       <div>
@@ -650,7 +659,7 @@
           <option value="">No mentor</option>
           {% for t in teachers %}
             <option value="{{ t.id }}">
-              {{ t.user.get_full_name|default:t.user.username }}
+              {{ t.display_name|default:t.user.get_full_name|default:t.user.username }}
             </option>
           {% endfor %}
         </select>

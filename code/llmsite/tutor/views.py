@@ -72,6 +72,29 @@ def _session_id(request):
     return request.session.session_key
 
 
+def _split_full_name(full_name: str) -> tuple[str, str, str]:
+    cleaned = (full_name or "").strip()
+    if not cleaned:
+        return "", "", ""
+
+    parts = cleaned.split(None, 1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+    return cleaned, first_name, last_name
+
+
+def _display_name_for_user(user, explicit_name: str = "") -> str:
+    explicit = (explicit_name or "").strip()
+    if explicit:
+        return explicit
+
+    full_name = (user.get_full_name() or "").strip()
+    if full_name:
+        return full_name
+
+    return user.username
+
+
 def _try_extract_quiz_json(text: str):
     """
     Robustly extract JSON quiz object from model text.
@@ -262,6 +285,7 @@ def account_create(request):
 
     role = (request.POST.get("role") or "").strip()
     username = (request.POST.get("username") or "").strip()
+    full_name = (request.POST.get("full_name") or "").strip()
     email = (request.POST.get("email") or "").strip()
     password = request.POST.get("password") or ""
 
@@ -273,20 +297,27 @@ def account_create(request):
     
     if User.objects.filter(username=username).exists():
         return redirect("dashboard")
+
+    _, first_name, last_name = _split_full_name(full_name)
     
     user = User.objects.create_user(
         username=username,
         email=email,
         password=password,
+        first_name=first_name,
+        last_name=last_name,
     )
 
+    display_name = _display_name_for_user(user, full_name)
+
     if role == "teacher":
-        TeacherProfile.objects.create(user=user)
+        TeacherProfile.objects.create(user=user, display_name=display_name)
     elif role == "admin":
-        AdminProfile.objects.create(user=user)
+        AdminProfile.objects.create(user=user, display_name=display_name)
     elif role == "student":
         StudentProfile.objects.create(
             user=user,
+            display_name=display_name,
             grade=grade,
             classes=classes,
         )
