@@ -94,16 +94,16 @@ def calculate_student_progress(user):
     
     # Calculate overall completion percentage (Option C: Hybrid)
     # 70% weight on quiz performance, 30% weight on session activity
-    quiz_component = Decimal(0)
+    quiz_component = 0.0
     if quiz_average is not None:
         # Normalize quiz average to 0-1 scale and apply weight
-        quiz_component = (quiz_average / Decimal(100)) * Decimal(70)
+        quiz_component = (quiz_average / 100.0) * 70.0
     
-    session_component = Decimal(0)
+    session_component = 0.0
     if total_sessions > 0:
         # Cap session activity at 10 sessions for 100% of this component
         session_score = min(total_sessions / 10, 1.0)
-        session_component = Decimal(session_score) * Decimal(30)
+        session_component = session_score * 30.0
     
     overall_completion = quiz_component + session_component
     
@@ -142,7 +142,7 @@ def calculate_student_progress(user):
     return {
         'overall_completion_percent': float(overall_completion),
         'current_module': current_module,
-        'quiz_average': float(quiz_average) if quiz_average else None,
+        'quiz_average': quiz_average * 100 if quiz_average is not None else None,
         'activity_streak': activity_streak,
         'last_activity': last_activity.isoformat() if last_activity else None,
         'total_sessions': total_sessions,

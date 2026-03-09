@@ -32,7 +32,7 @@
           <button
             class="w-full text-left p-2 rounded-lg hover:bg-gray-50 text-gray-700"
             data-section="intervention">
-            Intervention
+            Intervention{% if intervention_alert %} ⚠️{% endif %}
           </button>
         </li>
         {% if is_admin %}
@@ -124,6 +124,57 @@
               </tbody>
             </table>
           </div>
+        </div>
+      </div>
+      
+      <!-- Intervention section -->
+      <div id="section-intervention" class="space-y-6 hidden">
+        <div class="border rounded-xl overflow-hidden">
+          <table class="min-w-full text-sm">
+            <thead class="bg-gray-50 text-gray-600">
+              <tr>
+                <th class="px-4 py-2 text-left font-medium">Name</th>
+                <th class="px-4 py-2 text-center font-medium">Status</th>
+                <th class="px-4 py-2 text-right font-medium">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              {% for s, i in intervention_list %}
+                <tr>
+                  <td class="px-4 py-2">
+                    {{ s.user.get_full_name|default:s.user.username }}
+                  </td>
+                  <td class="px-4 py-2 text-center text-gray-600">
+                    {% if i == 0 %} Struggling {% elif i == 1 %} Failing {% endif %}
+                  </td>
+                  <td class="px-4 py-2 text-right space-x-2">
+                    <button
+                      type="button"
+                      class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 chat-history-btn"
+                      data-role="student"
+                      data-student-id="{{ s.user.id }}"
+                      data-classes="{{ s.classes|default_if_none:''|escapejs }}"
+                      data-teacher-id="{{ s.teacher.id|default:'' }}">
+                      Chat History
+                    </button>
+                    <button
+                      type="button"
+                      class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 view-progress-btn"
+                      data-role="student"
+                      data-user-id="{{ s.user.id }}">
+                      View Progress
+                    </button>
+                  </td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="3" class="px-4 py-3 text-center text-gray-400">
+                    No students found.
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -633,6 +684,7 @@
     const sections = {
       "default": document.getElementById("section-default"),
       "students": document.getElementById("section-students"),
+      "intervention": document.getElementById("section-intervention"),
       "curriculum": document.getElementById("section-curriculum"),
       "accounts": document.getElementById("section-accounts"),
     };
@@ -655,7 +707,7 @@
       subtitle = "Add and remove documents to be used by the tutor in sessions.";
     } else if (sectionKey === "intervention") {
       title = "Intervention";
-      subtitle = "Intervention view is not set up yet.";
+      subtitle = "View a list of students who may need extra help.";
     } else if (sectionKey === "export") {
       title = "Export Data";
       subtitle = "Export view is not set up yet.";

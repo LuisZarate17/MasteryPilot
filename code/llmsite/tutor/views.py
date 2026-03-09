@@ -14,10 +14,10 @@ import json
 import os
 import re
 
-from languagemodel import InitModel, StartChat, SendMessage
-from languagemodel_legacy import *
+from languagemodel_mistral import InitModel, StartChat, SendMessage
+#from languagemodel_legacy import *
 from httpx import request
-from .models import Quiz, Session, Chat as DBChat, StudentProgress
+from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile
 from tutor.globals import GetModelAndTokenizer
@@ -40,7 +40,8 @@ def ensure_llm_initialized():
         if gemini is None:
             try:
                 # StartAIChat should be available via languagemodel_legacy import
-                gemini = StartAIChat()
+                #gemini = StartAIChat()
+                pass
             except Exception as e:
                 print(f"[ensure_llm_initialized] Failed to start Gemini: {e}")
                 gemini = None
@@ -130,9 +131,14 @@ def landing_page(request):
         # First time user - calculate initial progress
         calculate_student_progress(request.user)
         progress = StudentProgress.objects.get(user=request.user)
-    
+        
+    quiz_avg = None
+    if progress.quiz_average:
+        quiz_avg = progress.quiz_average * 100
+
     context = {
         'progress': progress,
+        'quiz_avg': quiz_avg,
         'has_activity': progress.total_sessions > 0 or progress.total_quizzes > 0,
     }
     
@@ -178,10 +184,31 @@ def dashboard_page(request):
     if os.path.exists(settings.CURRICULUM_ROOT):
         files = sorted(os.listdir(settings.CURRICULUM_ROOT))
 
+    # Get intervention list
+    intervention_list = []
+    intervention_alert = False
+    for student in students:
+        progress = StudentProgress.objects.filter(user=student.user).first()
+        if progress is None:
+            continue
+
+        if progress.quiz_average is None:
+            continue
+
+        if progress.quiz_average < 0.7:
+            if progress.quiz_average < 0.5:
+                intervention_list.append((student, 1))
+                intervention_alert = True
+            else:
+                intervention_list.append((student, 0))
+                
+
     context = {
+        "intervention_alert": intervention_alert,
         "teachers": teachers,
         "admins": admins,
         "students": students,
+        "intervention_list": intervention_list,
         "curriculum_files": files,
         "is_admin": is_admin_flag,
         "is_teacher": is_teacher_flag,
@@ -348,9 +375,9 @@ def api_new_session(request):
 
     # Student info
     name   = request.user.get_full_name() or request.user.username
-    school = "George Washington High School"
-    grade  = "Sophomore"
-    classes = "Algebra 2, History, AP Language/Composition"
+    school = request.user.school
+    grade  = request.user.grade
+    classes = request.user.classes
 
     # Ensure LLM/Gemini is initialized
     ensure_llm_initialized()
@@ -360,6 +387,7 @@ def api_new_session(request):
     assistant_msg = "Hello!"  # fallback
 
     if settings.GEMINI_ENABLED:
+        """
         # Gemini path: call but DON'T persist error messages into DB/history
         try:
             if gemini is None:
@@ -372,6 +400,8 @@ def api_new_session(request):
             print(f"[api_new_session] Gemini initialization error: {e}")
             messages = []
             assistant_msg = "Model unavailable. Please try again later."
+        """
+        pass
     else:
         # Local LLM path
         if model is None or tokenizer is None:
@@ -444,6 +474,7 @@ def api_init(request):
         CHAT_REGISTRY[sid] = messages
         return JsonResponse({"ok": True, "model_text": assistant_msg})
     else:
+        """
         try:
             if gemini is None:
                 gemini = StartAIChat()
@@ -460,7 +491,8 @@ def api_init(request):
             assistant_msg = "Model error. Please try again later."
 
         return JsonResponse({"ok": True, "model_text": assistant_msg})
-
+        """
+        pass
 
 #@csrf_exempt
 @require_http_methods(["POST"])
@@ -494,7 +526,7 @@ def api_chat(request):
             try:
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
                 CHAT_REGISTRY[sid] = messages
-                assistant_reply_text = reply.split("<|assistant|>")[-1].strip() if isinstance(reply, str) else None
+                assistant_reply_text = reply if isinstance(reply, str) else None
                 if not assistant_reply_text and messages:
                     assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
             except Exception as e:
@@ -503,6 +535,7 @@ def api_chat(request):
                 error_occurred = True
     else:
         # Gemini path
+        """
         try:
             if gemini is None:
                 try:
@@ -553,7 +586,9 @@ def api_chat(request):
         if not error_occurred:
             existing.append({"role": "assistant", "content": assistant_reply_text})
         CHAT_REGISTRY[sid] = existing
-
+        """
+        pass
+    
     # Persist to DB: only persist user + assistant when there was no model error.
     try:
         session_id = request.session.get("session_id")
@@ -764,11 +799,59 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-
-    chats = DBChat.objects.filter(session=session).order_by("id")
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
     llm_messages = [{"role": c.role, "content": c.message} for c in chats]
+
+    quiz_attempts = []
+    quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
+    for quiz in quizzes:
+        quiz_answer = quiz.answers.order_by("-submitted_at").first()
+        test = (quiz.quiz_json or {}).get("test") or {}
+        items = []
+        if isinstance(test, dict):
+            for qid, qdata in test.items():
+                qdata = qdata or {}
+                answers_list = qdata.get("answers") or []
+                correct_raw = str(qdata.get("correct", "")).strip()
+
+                correct_display = correct_raw
+                if re.match(r'^\d+$', correct_raw):
+                    ci = int(correct_raw)
+                    if 0 <= ci < len(answers_list):
+                        correct_display = str(answers_list[ci])
+
+                user_raw = ""
+                user_display = ""
+                is_correct = None
+
+                if quiz_answer:
+                    answers_json = quiz_answer.answers_json or {}
+                    graded_json = quiz_answer.graded_json or {}
+                    user_raw = str(answers_json.get(qid, "")).strip()
+                    user_display = user_raw
+                    if re.match(r'^\d+$', user_raw):
+                        ui = int(user_raw) - 1
+                        if 0 <= ui < len(answers_list):
+                            user_display = str(answers_list[ui])
+
+                    grade_item = graded_json.get(qid)
+                    if isinstance(grade_item, dict) and "isCorrect" in grade_item:
+                        is_correct = bool(grade_item.get("isCorrect"))
+
+                items.append({
+                    "qid": qid,
+                    "student_answer": user_display,
+                    "correct_answer": correct_display,
+                    "is_correct": is_correct,
+                })
+
+        quiz_attempts.append({
+            "quiz_id": str(quiz.id),
+            "status": quiz.status,
+            "has_submission": quiz_answer is not None,
+            "items": items,
+        })
 
     sid = _session_id(request)
     CHAT_REGISTRY[sid] = llm_messages
@@ -777,7 +860,7 @@ def api_session_messages(request, session_id):
     if not is_teacher_or_admin(request.user):
         request.session['session_id'] = str(session.id)
 
-    return JsonResponse({"ok": True, "messages": messages})
+    return JsonResponse({"ok": True, "messages": messages, "quiz_attempts": quiz_attempts})
 
 
 @csrf_exempt
@@ -797,6 +880,10 @@ def api_session_init(request, session_id):
     school = "George Washington High School"
     grade = "Sophomore"
     classes = "Algebra 2, History, AP Language/Composition"
+    
+    ensure_llm_initialized()
+    if model is None or tokenizer is None:
+        return JsonResponse({"ok": False, "error": "Model unavailable"}, status=503)
 
     try:
         chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
@@ -907,7 +994,9 @@ def api_grade_quiz(request):
     
     total_points = 0.0
     earned_points = 0.0
-    graded = {}  # map qid -> feedback
+    graded_feedback = {}  # qid -> message (for frontend modal)
+    graded_json = {}      # qid -> structured grading (for persistence/analytics)
+    answers_json = {}     # qid -> raw submitted answer token
 
     for idx, (qid, qdata) in enumerate(q_items):
         correct = qdata.get("correct")
@@ -961,14 +1050,19 @@ def api_grade_quiz(request):
         if is_correct:
             feedback = "correct"
         else:
-            # Provide a clearer explanation
             if user_display:
                 feedback = f"incorrect: Your answer: {user_display}. Correct: {correct_display}"
             else:
                 feedback = f"incorrect: Answer was {correct_display}"
 
         earned_points += possible if is_correct else 0
-        graded[qid] = feedback
+        graded_feedback[qid] = feedback
+        graded_json[qid] = {
+            "isCorrect": is_correct,
+            "studentAnswer": user_display,
+            "correctAnswer": correct_display,
+        }
+        answers_json[qid] = user_ans_str
         
     quiz.possible_pts = total_points
     quiz.earned_pts = earned_points
@@ -976,6 +1070,12 @@ def api_grade_quiz(request):
     quiz.ended_at = timezone.now()
     quiz.save(update_fields=["status", "possible_pts", "earned_pts", "ended_at"])
 
+    QuizAnswer.objects.create(
+        quiz=quiz,
+        answers_json=answers_json,
+        graded_json=graded_json,
+    )
+
     # Return structured JSON (frontend will parse and display it)
-    feedback_json = json.dumps(graded)
+    feedback_json = json.dumps(graded_feedback)
     return JsonResponse({"ok": True, "model_text": feedback_json})
