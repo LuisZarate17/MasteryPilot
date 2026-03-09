@@ -231,7 +231,7 @@ def StartChat(model, tokenizer, studentName, studentSchool, studentGrade, studen
         {"role": "user", "content": InitializationPrompt(studentName, studentSchool, studentGrade, studentClasses)},
     ]
 
-    # LoadCurriculum()
+    LoadCurriculum()
 
     print("Generating initial response")
     assistant_text = _generate_assistant_turn(model, tokenizer, messages)
@@ -250,7 +250,7 @@ def SendMessage(model, tokenizer, messages, new_message):
     print("Getting curriculum context from RAG")
 
     # Block 1
-    """hits = retrieve(new_message, top_k=3)
+    hits = retrieve(new_message, top_k=3)
 
     # Block 2
     # Formula name: Top-k join
@@ -263,12 +263,12 @@ def SendMessage(model, tokenizer, messages, new_message):
         )
     else:
         context_text = ""
-    """
+    
 
     # Block 3
     messages_for_generation = list(messages)
 
-    """
+    
     if context_text:
         messages_for_generation.append({
             "role": "system",
@@ -278,7 +278,7 @@ def SendMessage(model, tokenizer, messages, new_message):
                 f"{context_text}"
             )
         })
-    """
+    
 
     print("Generating response")
     assistant_text = _generate_assistant_turn(model, tokenizer, messages_for_generation)
