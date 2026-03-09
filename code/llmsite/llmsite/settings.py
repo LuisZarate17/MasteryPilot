@@ -29,6 +29,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 CURRICULUM_ROOT = BASE_DIR / "curriculum"
 
+# LLM to use
+LLM_MODULE = "qwen"
+
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/

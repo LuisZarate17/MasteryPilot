@@ -30,8 +30,17 @@ tokenizer = None
 gemini = None
 
 def _get_local_llm_fns():
-    from languagemodel_mistral import InitModel, StartChat, SendMessage
-    return InitModel, StartChat, SendMessage
+    if settings.LLM_MODULE == "mistral":
+        from languagemodel_mistral import InitModel, StartChat, SendMessage
+        return InitModel, StartChat, SendMessage
+    
+    elif settings.LLM_MODULE == "qwen":
+        from languagemodel_qwen import InitModel, StartChat, SendMessage
+        return InitModel, StartChat, SendMessage
+    
+    elif settings.LLM_MODULE == "llama":
+        from languagemodel_llama import InitModel, StartChat, SendMessage
+        return InitModel, StartChat, SendMessage
 
 def ensure_llm_initialized():
     """
