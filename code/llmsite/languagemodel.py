@@ -5,7 +5,7 @@ import os
 import torch
 
 # Import RAG helper functions
-from rag import load_txt_files, load_pdf_files, retrieve
+from rag import ensure_curriculum_loaded, retrieve, build_rag_system_message
 CURRICULUM_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "llmsite/curriculum") #Path
 MAX_CONTEXT = 130000
 
@@ -78,14 +78,9 @@ def InitModel():
     return model, tokenizer
 
 def LoadCurriculum():
-    """Load text and PDF files into RAG if available."""
+    """Load curriculum into RAG. Uses disk-cached index when still fresh."""
     print(f"Loading curriculum from {CURRICULUM_PATH}...")
-    if os.path.exists(CURRICULUM_PATH):
-        load_txt_files(CURRICULUM_PATH)
-        load_pdf_files(CURRICULUM_PATH)
-        print("Curriculum loaded successfully.")
-    else:
-        print("No curriculum folder found. Skipping document load.")
+    ensure_curriculum_loaded(CURRICULUM_PATH)
 
 
 def InitializationPrompt(studentName, studentSchool, studentGrade, studentClasses):
@@ -140,20 +135,21 @@ def StartChat(model, tokenizer, studentName, studentSchool, studentGrade, studen
 
 # Conversation
 def SendMessage(model, tokenizer, messages, new_message):
-    """Send user message to local LLM, optionally using RAG context."""
+    """Send user message to local LLM with RAG context injected as a system message."""
     print("New message sent:", new_message)
 
-    print("Getting curriculum context from RAG")
-    # Get curriculum context
-    context_chunks = retrieve(new_message)[:3]
-    new_message_with_context = ""
-    if context_chunks:
-        new_message_with_context = "Context:\n" + "\n".join(context_chunks) + "\n\n---\nStudent message: " + new_message
+    # Retrieve relevant curriculum context
+    context_chunks = retrieve(new_message)
+    rag_msg = build_rag_system_message(context_chunks)
 
+    # Append clean user message to the DB-persisted list
     messages.append({"role": "user", "content": new_message})
 
-    messages_with_context = messages.copy()
-    messages_with_context.append({"role": "user", "content": new_message_with_context})
+    # Build the context-augmented message list for the LLM (not persisted)
+    messages_with_context = list(messages)
+    if rag_msg:
+        # Insert RAG block as a system message right after the main system prompt
+        messages_with_context.insert(1, {"role": "system", "content": rag_msg})
 
     # Prepare chat prompt
     chat_template = """{% for message in messages %}
@@ -164,7 +160,7 @@ def SendMessage(model, tokenizer, messages, new_message):
 """
 
     print("Generating response")
-    chat_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False, chat_template=chat_template, max_length=MAX_CONTEXT)
+    chat_prompt = tokenizer.apply_chat_template(messages_with_context, tokenize=False, add_generation_prompt=False, chat_template=chat_template, max_length=MAX_CONTEXT)
     inputs = tokenizer(chat_prompt, return_tensors="pt", truncation=True).to(model.device)
 
     outputs = model.generate(

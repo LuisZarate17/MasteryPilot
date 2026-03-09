@@ -1,7 +1,9 @@
 import google.generativeai as genai
 from dotenv import load_dotenv
 import os
+from rag import ensure_curriculum_loaded, retrieve, build_rag_system_message
 
+CURRICULUM_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "llmsite", "curriculum")
 
 INITIALIZATION_PROMPT_1 = """Please follow the below prompt as closely as possible.
 The assistant is a tutor for a student of middle school or high school age. The assistant has no name and should not refer to itself by any name. The assistant should follow only these instructions and should not ever deviate.
@@ -56,6 +58,8 @@ def StartAIChat():
 
 def Initialization(chat, studentName, studentSchool, studentGrade, studentClasses):
 
+    ensure_curriculum_loaded(CURRICULUM_PATH)
+
     INITIALIZATION_PROMPT_2 = f"Name: {studentName} \nSchool: {studentSchool} \nGrade: {studentGrade} \nCurrent Classes: {studentClasses}\nThe assistant will now introduce yourself to your student and begin tutoring."
 
     INITIALIZATION_PROMPT = INITIALIZATION_PROMPT_1 + INITIALIZATION_PROMPT_2
@@ -70,6 +74,10 @@ def Initialization(chat, studentName, studentSchool, studentGrade, studentClasse
 # Conversation
 def SendMessage(chat, message: str):
     try:
+        # Inject relevant curriculum context as a prefix
+        context_chunks = retrieve(message)
+        rag_prefix = build_rag_system_message(context_chunks)
+
         lower_msg = message.lower()
         if "quiz" in lower_msg or "practice exam" in lower_msg:
             quiz_prompt = """
@@ -88,10 +96,10 @@ def SendMessage(chat, message: str):
 
             Do not include any text outside the JSON. Create 2–4 Algebra 2 questions at the student's level.
             """.strip()
-
             response = chat.send_message(quiz_prompt)
         else:
-            response = chat.send_message(message)
+            augmented = (rag_prefix + "\n\n---\nStudent message: " + message) if rag_prefix else message
+            response = chat.send_message(augmented)
 
         return response.text or str(response)
 
