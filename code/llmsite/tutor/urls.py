@@ -5,7 +5,7 @@ from .views import (
     chat_page, api_new_session, api_init, api_chat, api_reset, api_new_session, signup, 
     dashboard_page, account_create, account_delete, student_edit, 
     upload_curriculum, curriculum_delete, curriculum_view,
-    api_session_messages, api_delete_session, api_list_sessions, api_rename_session,
+    api_session_messages, api_delete_session, api_list_sessions, api_rename_session, api_export_chats,
     landing_page, progress_summary, progress_detail, chat_history
 )
 
@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/grade-quiz/", views.api_grade_quiz, name="api_grade_quiz"),
     path("api/reset/", api_reset, name="api_reset"),
     path("api/progress/summary/", progress_summary, name="progress_summary"),
+    path("api/export/chats/", api_export_chats, name="api_export_chats"),
     path("dashboard/create_account/", account_create, name="account_create"),
     path("dashboard/delete_account/", account_delete, name="account_delete"),
     path("dashboard/edit_student", student_edit, name="student_edit"),

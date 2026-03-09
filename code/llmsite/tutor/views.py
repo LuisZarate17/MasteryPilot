@@ -1,4 +1,4 @@
-from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest
+from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest, HttpResponse
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods, require_GET
@@ -13,6 +13,7 @@ from .forms import SignupForm, UploadRagForm
 import json
 import os
 import re
+import csv
 
 from languagemodel_mistral import InitModel, StartChat, SendMessage
 #from languagemodel_legacy import *
@@ -778,6 +779,127 @@ def upload_curriculum(request):
             dest.write(chunk)
 
     return redirect("dashboard")
+
+
+@login_required
+@user_passes_test(is_teacher_or_admin)
+@require_GET
+def api_export_chats(request):
+    export_format = (request.GET.get("format") or "csv").strip().lower()
+    if export_format not in {"csv", "json"}:
+        return HttpResponseBadRequest("format must be csv or json")
+
+    student_id_raw = request.GET.get("student_id")
+    try:
+        student_id = int(student_id_raw)
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("student_id is required")
+
+    User = get_user_model()
+    try:
+        target_user = User.objects.get(id=student_id)
+    except User.DoesNotExist:
+        return JsonResponse({"error": "Student not found"}, status=404)
+
+    try:
+        target_student = StudentProfile.objects.get(user=target_user)
+    except StudentProfile.DoesNotExist:
+        return JsonResponse({"error": "Student not found"}, status=404)
+
+    # Admins can export any student.
+    # Teachers can export only students assigned to them.
+    if not is_admin(request.user):
+        try:
+            teacher_profile = TeacherProfile.objects.get(user=request.user)
+        except TeacherProfile.DoesNotExist:
+            return JsonResponse({"error": "Access denied"}, status=403)
+
+        if target_student.teacher_id != teacher_profile.id:
+            return JsonResponse({"error": "Access denied"}, status=403)
+
+    sessions = list(
+        Session.objects.filter(owner=target_user).order_by("created_at", "id")
+    )
+    session_ids = [s.id for s in sessions]
+    chats = (
+        DBChat.objects
+        .filter(session_id__in=session_ids)
+        .select_related("session")
+        .order_by("session__created_at", "created_at", "id")
+    )
+
+    exported_at = timezone.now()
+    exported_at_iso = exported_at.isoformat()
+    timestamp = exported_at.strftime("%Y%m%d_%H%M%S")
+    safe_username = re.sub(r"[^A-Za-z0-9_-]", "_", target_user.username)
+    filename = f"chat_export_{safe_username}_{timestamp}.{export_format}"
+
+    if export_format == "csv":
+        response = HttpResponse(content_type="text/csv; charset=utf-8")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        writer = csv.writer(response)
+        writer.writerow([
+            "student_id",
+            "student_username",
+            "student_name",
+            "session_id",
+            "session_title",
+            "session_created_at",
+            "message_created_at",
+            "role",
+            "message",
+        ])
+
+        student_name = target_student.display_name or target_user.get_full_name() or target_user.username
+        for chat in chats:
+            writer.writerow([
+                target_user.id,
+                target_user.username,
+                student_name,
+                str(chat.session_id),
+                chat.session.title,
+                chat.session.created_at.isoformat(),
+                chat.created_at.isoformat(),
+                chat.role,
+                chat.message,
+            ])
+        return response
+
+    session_payload = {
+        str(s.id): {
+            "id": str(s.id),
+            "title": s.title,
+            "created_at": s.created_at.isoformat(),
+            "messages": [],
+        }
+        for s in sessions
+    }
+
+    for chat in chats:
+        session_payload[str(chat.session_id)]["messages"].append({
+            "id": str(chat.id),
+            "role": chat.role,
+            "text": chat.message,
+            "created_at": chat.created_at.isoformat(),
+        })
+
+    payload = {
+        "exported_at": exported_at_iso,
+        "student": {
+            "id": target_user.id,
+            "username": target_user.username,
+            "name": target_student.display_name or target_user.get_full_name() or target_user.username,
+            "email": target_user.email,
+        },
+        "sessions": list(session_payload.values()),
+    }
+
+    response = HttpResponse(
+        json.dumps(payload, indent=2),
+        content_type="application/json; charset=utf-8",
+    )
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    return response
 
 
 @login_required

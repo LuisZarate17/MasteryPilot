@@ -311,6 +311,63 @@
         </div>
       </div>
 
+      <!-- Export section -->
+      <div id="section-export" class="space-y-6 hidden">
+        <div class="border rounded-2xl p-4">
+          <div class="mb-3">
+            <h3 class="text-base font-semibold text-gray-900">Export chat history</h3>
+            <p class="text-xs text-gray-500">
+              Download session chats for a selected student as CSV or JSON.
+            </p>
+          </div>
+
+          <form
+            method="get"
+            action="{% url 'api_export_chats' %}"
+            class="space-y-3 text-sm">
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Student</label>
+              <select
+                name="student_id"
+                class="w-full rounded-lg border px-3 py-2 text-sm"
+                required>
+                <option value="">Select a student</option>
+                {% for s in students %}
+                  <option value="{{ s.user.id }}">
+                    {{ s.display_name|default:s.user.get_full_name|default:s.user.username }}
+                  </option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-sm font-medium text-gray-700 mb-1">Format</label>
+              <select
+                name="format"
+                class="w-full rounded-lg border px-3 py-2 text-sm">
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+            </div>
+
+            <div class="pt-2">
+              <button
+                type="submit"
+                class="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                {% if not students %}disabled{% endif %}>
+                Download export
+              </button>
+            </div>
+          </form>
+
+          {% if not students %}
+            <p class="mt-3 text-sm text-gray-500">
+              No students available to export.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+
       {% if is_admin %}
       <!-- Accounts section -->
       <div id="section-accounts" class="space-y-8">
@@ -695,6 +752,7 @@
       "students": document.getElementById("section-students"),
       "intervention": document.getElementById("section-intervention"),
       "curriculum": document.getElementById("section-curriculum"),
+      "export": document.getElementById("section-export"),
       "accounts": document.getElementById("section-accounts"),
     };
 
@@ -719,7 +777,7 @@
       subtitle = "View a list of students who may need extra help.";
     } else if (sectionKey === "export") {
       title = "Export Data";
-      subtitle = "Export view is not set up yet.";
+      subtitle = "Download chat data for a selected student.";
     }
 
     sectionTitle.textContent = title;
