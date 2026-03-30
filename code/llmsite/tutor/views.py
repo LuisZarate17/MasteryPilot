@@ -419,10 +419,16 @@ def api_new_session(request):
     request.session['session_id'] = str(session.id)
 
     # Student info
-    name   = request.user.get_full_name() or request.user.username
-    school = request.user.school
-    grade  = request.user.grade
-    classes = request.user.classes
+    name = request.user.get_full_name() or request.user.username
+    try:
+        profile = request.user.studentprofile
+        school = profile.school
+        grade = profile.grade
+        classes = profile.classes
+    except Exception:
+        school = "George Washington High School"
+        grade = "Freshman"
+        classes = "Algebra 2, History, English"
 
     # Ensure LLM/Gemini is initialized
     ensure_llm_initialized()
@@ -493,10 +499,17 @@ def api_new_session(request):
 def api_init(request):
     import time
     print("api_init called at", time.time())
-    name   = "John Doe"
-    school = "George Washington High School"
-    grade  = "Sophomore"
-    classes = "Algebra 2, History, AP Language/Composition"
+    # Student info
+    name = request.user.get_full_name() or request.user.username
+    try:
+        profile = request.user.studentprofile
+        school = profile.school
+        grade = profile.grade
+        classes = profile.classes
+    except Exception:
+        school = "George Washington High School"
+        grade = "Freshman"
+        classes = "Algebra 2, History, English"
 
     # Ensure LLM/Gemini is initialized
     ensure_llm_initialized()
