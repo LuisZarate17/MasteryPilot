@@ -1,5 +1,5 @@
 # languagemodel_qwen.py
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 from dotenv import load_dotenv
 import os
 import torch
@@ -84,34 +84,32 @@ def InitModel():
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=quant_config,
+        device_map="auto",
+    )
+
+    print("Running Torch " + torch.__version__)
+    print("Torch CUDA version:" + torch.version.cuda)
+    print("torch.cuda.is_available() =", torch.cuda.is_available())
     if torch.cuda.is_available():
-        # Qwen3 commonly runs well in float16 on CUDA
-        dtype = torch.float16
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                config=cfg,
-                torch_dtype=dtype,
-                device_map="auto",
-            )
-        except ValueError as exc:
-            if "requires `accelerate`" not in str(exc):
-                raise
-            print("accelerate not found, retrying load without device_map")
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                config=cfg,
-                torch_dtype=dtype,
-            )
-            model.to("cuda")
+        print("cuda device count =", torch.cuda.device_count())
+        print("cuda device 0 =", torch.cuda.get_device_name(0))
+        props = torch.cuda.get_device_properties(0)
+        print("total VRAM bytes =", props.total_memory)
+
+    if hasattr(model, "hf_device_map"):
+        print("hf_device_map =", model.hf_device_map)
     else:
-        dtype = torch.float32
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            config=cfg,
-            torch_dtype=dtype,
-        )
-        model.to("cpu")
+        print("No hf_device_map on model")
 
     model.eval()
     return model, tokenizer
@@ -180,7 +178,7 @@ def _generate_assistant_turn(
     model,
     tokenizer,
     messages_for_generation,
-    max_new_tokens=350,
+    max_new_tokens=200,
     temperature=0.7,
     top_p=0.8,
     top_k=20
@@ -194,7 +192,11 @@ def _generate_assistant_turn(
       - output_ids (generated sequence)
       - prompt_len (number of input tokens)
     """
+    import time
+
+    t0 = time.perf_counter()
     chat_text = _build_chat_text(tokenizer, messages_for_generation, add_generation_prompt=True)
+    t1 = time.perf_counter()
 
     max_input = _effective_max_input_tokens(tokenizer)
 
@@ -204,22 +206,33 @@ def _generate_assistant_turn(
         truncation=True,
         max_length=max_input,
     ).to(model.device)
+    t2 = time.perf_counter()
 
-    outputs = model.generate(
-        **inputs,
-        max_new_tokens=max_new_tokens,
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-        do_sample=True,
-        eos_token_id=tokenizer.eos_token_id,
-        pad_token_id=tokenizer.pad_token_id,
-    )
+    with torch.inference_mode():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            do_sample=True,
+            eos_token_id=tokenizer.eos_token_id,
+            pad_token_id=tokenizer.pad_token_id,
+        )
+    t3 = time.perf_counter()
 
     prompt_len = inputs["input_ids"].shape[-1]
     assistant_ids = outputs[0][prompt_len:]
     assistant_text = tokenizer.decode(assistant_ids, skip_special_tokens=True).strip()
     assistant_text = _clean_qwen_output(assistant_text)
+    t4 = time.perf_counter()
+
+    print("build_chat:", t1 - t0)
+    print("tokenize:", t2 - t1)
+    print("generate:", t3 - t2)
+    print("decode:", t4 - t3)
+    print("input_tokens:", inputs["input_ids"].shape[-1])
+    print("output_tokens:", assistant_ids.shape[-1])
     return assistant_text
 
 

@@ -1,5 +1,5 @@
 # languagemodel.py
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, BitsAndBytesConfig
 from dotenv import load_dotenv
 import os
 import torch
@@ -65,7 +65,7 @@ def InitModel():
     """
     load_dotenv()
 
-    model_id = os.getenv("LANGUAGE_MODEL_ID", "mistralai/Mistral-7B-Instruct-v0.3")
+    model_id = os.getenv("LANGUAGE_MODEL_ID", "mistralai/Ministral-3-3B-Instruct-2512")
 
     cfg = AutoConfig.from_pretrained(model_id)
     # Some published configs declare unexpected tied-weight mappings.
@@ -80,33 +80,19 @@ def InitModel():
     if tokenizer.pad_token_id is None and tokenizer.eos_token_id is not None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    if torch.cuda.is_available():
-        dtype = torch.float16
-        try:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                config=cfg,
-                torch_dtype=dtype,
-                device_map="auto",
-            )
-        except ValueError as exc:
-            if "requires `accelerate`" not in str(exc):
-                raise
-            print("accelerate not found; retrying load without device_map")
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
-                config=cfg,
-                torch_dtype=dtype,
-            )
-            model.to("cuda")
-    else:
-        dtype = torch.float32
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            config=cfg,
-            torch_dtype=dtype,
-        )
-        model.to("cpu")
+    quant_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.float16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        quantization_config=quant_config,
+        device_map="auto",
+    )
+
 
     model.eval()
     return model, tokenizer

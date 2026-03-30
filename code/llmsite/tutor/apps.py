@@ -44,17 +44,3 @@ class TutorConfig(AppConfig):
             TutorConfig._llm_loaded = True
             print("Skipping Gemini/LLM initialization for management command.")
             return
-
-        TutorConfig._llm_loaded = True
-        
-        from django.conf import settings
-        from . import globals  # a small module to hold the variables
-
-        if settings.GEMINI_ENABLED:
-            print("[ -- TEST MODE -- ] Initializing Gemini for testing")
-        else:
-            print("Initializing LLM...")
-            from languagemodel_mistral import InitModel
-            model, tokenizer = InitModel()
-            globals.loaded_model = model
-            globals.loaded_tokenizer = tokenizer

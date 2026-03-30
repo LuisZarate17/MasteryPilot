@@ -185,6 +185,7 @@ def landing_page(request):
 def chat_page(request):
     if is_teacher_or_admin(request.user):
         return redirect("dashboard")
+    ensure_llm_initialized()
     return render(request, "chat.html")
 
 @login_required(login_url="login")
@@ -490,6 +491,8 @@ def api_new_session(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 def api_init(request):
+    import time
+    print("api_init called at", time.time())
     name   = "John Doe"
     school = "George Washington High School"
     grade  = "Sophomore"
