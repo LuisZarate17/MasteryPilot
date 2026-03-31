@@ -2,7 +2,6 @@ from django.http import FileResponse, Http404, HttpResponseRedirect, JsonRespons
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods, require_GET
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
@@ -403,7 +402,6 @@ def student_edit(request):
     return redirect("dashboard")
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_new_session(request):
@@ -494,8 +492,8 @@ def api_new_session(request):
     })
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
+@login_required
 def api_init(request):
     import time
     print("api_init called at", time.time())
@@ -556,7 +554,6 @@ def api_init(request):
         """
         pass
 
-#@csrf_exempt
 @require_http_methods(["POST"])
 def api_chat(request):
     try:
@@ -673,8 +670,8 @@ def api_chat(request):
         return JsonResponse({"ok": True, "model_text": assistant_reply_text})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
+@login_required
 def api_reset(request):
     sid = _session_id(request)
     CHAT_REGISTRY.pop(sid, None)
@@ -1047,7 +1044,6 @@ def api_session_messages(request, session_id):
     return JsonResponse({"ok": True, "messages": messages, "quiz_attempts": quiz_attempts})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_session_init(request, session_id):
@@ -1090,7 +1086,6 @@ def api_session_init(request, session_id):
     return JsonResponse({"ok": True, "model_text": assistant_msg or "Hello!"})
 
 
-@csrf_exempt
 @require_http_methods(["DELETE"])
 @login_required
 def api_delete_session(request, session_id):
@@ -1100,7 +1095,6 @@ def api_delete_session(request, session_id):
     return JsonResponse({"ok": True, "status": "deleted"})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_rename_session(request, session_id):
@@ -1117,7 +1111,6 @@ def api_rename_session(request, session_id):
     return JsonResponse({"ok": True, "id": str(session.id), "title": session.title})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_select_session(request, session_id):
