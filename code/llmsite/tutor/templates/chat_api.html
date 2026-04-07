@@ -115,9 +115,9 @@
     try {
       const res = await fetch("{% url 'api_chat' %}", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrftoken },
         credentials: "same-origin",
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           message: text,
           session_id: currentSessionId
         })

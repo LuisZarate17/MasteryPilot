@@ -144,3 +144,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Site configuration
 SITE_ID = 1
 
+# CSRF cookie hardening
+# Note: CSRF_COOKIE_HTTPONLY must remain False because the frontend
+# reads the CSRF token from the cookie via JavaScript (getCookie("csrftoken")).
+CSRF_COOKIE_SECURE = True
+
