@@ -790,6 +790,13 @@ def progress_detail(request):
     return render(request, 'progress_detail.html', context)
 
 
+ALLOWED_UPLOAD_TYPES = {
+    "txt": "text/plain",
+    "pdf": "application/pdf",
+}
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
 @login_required
 @user_passes_test(is_teacher_or_admin)
 @require_http_methods(["POST"])
@@ -800,15 +807,29 @@ def upload_curriculum(request):
     if not file:
         return redirect("dashboard")
 
-    filename = get_valid_filename(file.name)
-    ext = filename.lower().split(".")[-1]
+    if file.size > MAX_UPLOAD_SIZE:
+        return redirect("dashboard")
 
-    if ext not in {"txt", "pdf"}:
+    filename = get_valid_filename(file.name)
+
+    # Validate extension: use os.path.splitext to prevent double-extension bypass
+    _, dot_ext = os.path.splitext(filename)
+    ext = dot_ext.lstrip(".").lower()
+
+    if ext not in ALLOWED_UPLOAD_TYPES:
+        return redirect("dashboard")
+
+    # Verify MIME type matches expected content type
+    if file.content_type != ALLOWED_UPLOAD_TYPES[ext]:
         return redirect("dashboard")
 
     os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)
 
-    destination = os.path.join(settings.CURRICULUM_ROOT, filename)
+    safe_name = os.path.basename(filename)
+    destination = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
+
+    if not destination.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        return redirect("dashboard")
 
     with open(destination, "wb+") as dest:
         for chunk in file.chunks():
