@@ -256,12 +256,17 @@ def dashboard_page(request):
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
+
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        raise Http404("Invalid file path")
 
     if not os.path.exists(path):
         raise Http404("File not found")
 
-    return FileResponse(open(path, "rb"), as_attachment=False)
+    with open(path, "rb") as f:
+        return FileResponse(f, as_attachment=False)
 
 
 @login_required
@@ -269,8 +274,11 @@ def curriculum_view(request, filename):
 @require_http_methods(["POST"])
 def curriculum_delete(request):
     filename = request.POST.get("filename") or ""
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
 
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        return redirect("dashboard")
 
     if os.path.exists(path):
         os.remove(path)
