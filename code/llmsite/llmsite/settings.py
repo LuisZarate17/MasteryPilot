@@ -28,6 +28,7 @@ GEMINI_ENABLED = False
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 CURRICULUM_ROOT = BASE_DIR / "curriculum"
+DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
 
 # LLM to use
 LLM_MODULE = "qwen"
