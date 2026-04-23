@@ -21,9 +21,6 @@ from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, pa
 from .models import TeacherProfile, AdminProfile, StudentProfile
 from tutor.globals import GetModelAndTokenizer
 
-# in-memory registry for prototype use
-CHAT_REGISTRY = {}
-
 model = None
 tokenizer = None
 gemini = None
@@ -82,6 +79,19 @@ def _session_id(request):
     if not request.session.session_key:
         request.session.save()
     return request.session.session_key
+
+
+def _load_messages_from_db(request):
+    """Reconstruct the LLM messages list from DB for the current session."""
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return None
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return None
+    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")
+    return [{"role": c.role, "content": c.message} for c in chats]
 
 
 def _split_full_name(full_name: str) -> tuple[str, str, str]:
@@ -474,10 +484,6 @@ def api_new_session(request):
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
-    # store in-memory registry (keep consistent format)
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
-
     # persist messages to DB
     for m in messages:
         role = m.get("role")
@@ -539,7 +545,6 @@ def api_init(request):
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
-        CHAT_REGISTRY[sid] = messages
         return JsonResponse({"ok": True, "model_text": assistant_msg})
     else:
         """
@@ -573,8 +578,7 @@ def api_chat(request):
     if not msg:
         return HttpResponseBadRequest("message is required")
 
-    sid = _session_id(request)
-    chat = CHAT_REGISTRY.get(sid)
+    chat = _load_messages_from_db(request)
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
 
@@ -593,7 +597,6 @@ def api_chat(request):
             try:
                 SendMessage = _get_local_llm_fns()[2]
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
-                CHAT_REGISTRY[sid] = messages
                 assistant_reply_text = reply if isinstance(reply, str) else None
                 if not assistant_reply_text and messages:
                     assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
@@ -681,8 +684,7 @@ def api_chat(request):
 @require_http_methods(["POST"])
 @login_required
 def api_reset(request):
-    sid = _session_id(request)
-    CHAT_REGISTRY.pop(sid, None)
+    request.session.pop("session_id", None)
     return JsonResponse({"ok": True})
 
 
@@ -1011,8 +1013,6 @@ def api_session_messages(request, session_id):
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
     messages = [{"role": c.role, "text": c.message} for c in chats]
 
-    llm_messages = [{"role": c.role, "content": c.message} for c in chats]
-
     quiz_attempts = []
     quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
     for quiz in quizzes:
@@ -1063,9 +1063,6 @@ def api_session_messages(request, session_id):
             "items": items,
         })
 
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = llm_messages
-
     # set the active session for subsequent api_chat persistence
     if not is_teacher_or_admin(request.user):
         request.session['session_id'] = str(session.id)
@@ -1100,9 +1097,6 @@ def api_session_init(request, session_id):
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
 
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
-
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
@@ -1119,7 +1113,6 @@ def api_session_init(request, session_id):
 @login_required
 def api_delete_session(request, session_id):
     session = get_object_or_404(Session, id=session_id, owner=request.user)
-    CHAT_REGISTRY.pop(str(session_id), None)
     session.delete()
     return JsonResponse({"ok": True, "status": "deleted"})
 
@@ -1144,9 +1137,8 @@ def api_rename_session(request, session_id):
 @login_required
 def api_select_session(request, session_id):
     """
-    Select an existing DB session. Sets request.session['session_id'] and
-    rebuilds CHAT_REGISTRY for this user session from DB messages so
-    subsequent api_chat works and persists messages correctly.
+    Select an existing DB session. Sets request.session['session_id'] so
+    subsequent api_chat calls persist messages to the correct session.
     """
     try:
         session = Session.objects.get(id=session_id, owner=request.user)
@@ -1154,12 +1146,6 @@ def api_select_session(request, session_id):
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
     request.session['session_id'] = str(session.id)
-
-    chats = DBChat.objects.filter(session=session).order_by('id')
-    messages = [{"role": c.role, "content": c.message} for c in chats]
-
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
 
     return JsonResponse({"ok": True})
 
