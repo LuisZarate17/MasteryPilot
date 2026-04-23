@@ -14,7 +14,7 @@ import os
 import re
 import csv
 
-from languagemodel_legacy import DeriveSessionTitle
+# DeriveSessionTitle is dispatched per-module in _derive_session_title()
 from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
@@ -37,6 +37,25 @@ def _get_local_llm_fns():
     elif settings.LLM_MODULE == "llama":
         from languagemodel_llama import InitModel, StartChat, SendMessage
         return InitModel, StartChat, SendMessage
+
+def _derive_session_title(first_message: str) -> str:
+    """Dispatch DeriveSessionTitle to the correct LLM module."""
+    try:
+        if settings.GEMINI_ENABLED:
+            from languagemodel_legacy import DeriveSessionTitle
+            return DeriveSessionTitle(first_message)
+        elif settings.LLM_MODULE == "qwen":
+            from languagemodel_qwen import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+        elif settings.LLM_MODULE == "mistral":
+            from languagemodel_mistral import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+        elif settings.LLM_MODULE == "llama":
+            from languagemodel_llama import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+    except Exception as e:
+        print(f"[_derive_session_title] error: {e}")
+    return ""
 
 def ensure_llm_initialized():
     """
@@ -665,7 +684,7 @@ def api_chat(request):
             if session.title in ("", "New session"):
                 if not DBChat.objects.filter(session=session, role="user").exists():
                     try:
-                        derived = DeriveSessionTitle(msg)
+                        derived = _derive_session_title(msg)
                     except Exception as e:
                         print(f"[api_chat] DeriveSessionTitle error: {e}")
                         derived = ""
