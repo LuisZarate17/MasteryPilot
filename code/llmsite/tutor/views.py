@@ -159,6 +159,28 @@ def _try_extract_quiz_json(text: str):
     return None
 
 
+def _maybe_persist_quiz(session, assistant_reply_text):
+    """
+    If the assistant reply parses as a quiz JSON, supersede any existing
+    active quiz on this session and create a new active Quiz row so the
+    grading endpoint has something to score.
+    Returns True if a quiz was persisted.
+    """
+    quiz_json = _try_extract_quiz_json(assistant_reply_text)
+    if not quiz_json:
+        return False
+    Quiz.objects.filter(session=session, status="active").update(
+        status="submitted",
+        ended_at=timezone.now(),
+    )
+    Quiz.objects.create(
+        session=session,
+        status="active",
+        quiz_json=quiz_json,
+    )
+    return True
+
+
 @login_required
 def landing_page(request):
     """
@@ -668,6 +690,10 @@ def api_chat(request):
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+                try:
+                    _maybe_persist_quiz(session, assistant_reply_text)
+                except Exception as qe:
+                    print(f"[api_chat] Quiz persistence error: {qe}")
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
@@ -1268,6 +1294,13 @@ def api_grade_quiz(request):
         answers_json=answers_json,
         graded_json=graded_json,
     )
+
+    # Refresh cached StudentProgress so the dashboard quiz_average reflects
+    # this attempt immediately. A recompute failure must not fail grading.
+    try:
+        calculate_student_progress(request.user)
+    except Exception as pe:
+        print(f"[api_grade_quiz] Progress recompute error: {pe}")
 
     # Return structured JSON (frontend will parse and display it)
     feedback_json = json.dumps(graded_feedback)
