@@ -16,7 +16,7 @@
   </aside>
 
   <!-- Main Chat Window -->
-  <section class="bg-white rounded-2xl border shadow-sm flex flex-col w-full max-w-3xl mx-auto">
+  <section class="bg-white rounded-2xl border shadow-sm flex flex-col w-full max-w-3xl mx-auto h-[calc(100vh-7.5rem)]">
 
     <!-- Quiz Card (hidden by default, shown when quiz is active) -->
     <div id="quizCard" class="mb-4 hidden">
@@ -132,6 +132,13 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+
+      if (data.session_title && currentSessionId) {
+        const titleEl = document.querySelector(
+          `#sessionList li[data-session-id="${currentSessionId}"] .session-title`
+        );
+        if (titleEl) titleEl.textContent = data.session_title;
+      }
 
       const quizObj = parseQuizJson(data.model_text);
       if (quizObj) {

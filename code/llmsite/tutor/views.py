@@ -14,7 +14,7 @@ import os
 import re
 import csv
 
-#from languagemodel_legacy import *
+from languagemodel_legacy import DeriveSessionTitle
 from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
@@ -653,10 +653,27 @@ def api_chat(request):
         pass
     
     # Persist to DB: only persist user + assistant when there was no model error.
+    new_session_title = None
     try:
         session_id = request.session.get("session_id")
         if session_id:
             session = Session.objects.get(id=session_id, owner=request.user)
+
+            # Auto-title from the first user message if title is still the default.
+            # Ask the LLM for a 1-3 word topic; if it returns empty (gibberish /
+            # no clear topic) leave the title alone.
+            if session.title in ("", "New session"):
+                if not DBChat.objects.filter(session=session, role="user").exists():
+                    try:
+                        derived = DeriveSessionTitle(msg)
+                    except Exception as e:
+                        print(f"[api_chat] DeriveSessionTitle error: {e}")
+                        derived = ""
+                    if derived:
+                        session.title = derived
+                        session.save(update_fields=["title"])
+                        new_session_title = session.title
+
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
@@ -667,10 +684,12 @@ def api_chat(request):
     except Exception as e:
         print(f"Chat persistence or progress calc error: {e}")
 
+    payload = {"ok": True, "model_text": assistant_reply_text}
+    if new_session_title:
+        payload["session_title"] = new_session_title
     if error_occurred:
-        return JsonResponse({"ok": True, "model_text": assistant_reply_text, "error": True})
-    else:
-        return JsonResponse({"ok": True, "model_text": assistant_reply_text})
+        payload["error"] = True
+    return JsonResponse(payload)
 
 
 @require_http_methods(["POST"])
