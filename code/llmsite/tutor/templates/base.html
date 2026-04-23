@@ -1,5 +1,4 @@
 <!-- base.html -->
-{% load static %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,10 +27,11 @@
 </head>
 <body class="bg-gray-50 text-gray-900">
   <!-- Navbar -->
+  {% load static %}
   <nav class="bg-white border-b border-gray-200">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
       <a href="/" class="flex items-center gap-2 font-semibold text-brand-600 text-lg">
-        <div class="h-7 w-7 bg-brand-600 rounded-lg"></div>
+        <img src="{% static 'favicon.png' %}" alt="Logo" class="h-8 w-8">
         MasteryPilot
       </a>
       <div class="flex items-center gap-6 text-sm">
