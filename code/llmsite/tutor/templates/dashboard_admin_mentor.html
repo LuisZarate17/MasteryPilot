@@ -406,10 +406,11 @@
                       {% if is_admin %}
                       <button
                         type="button"
-                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50"
+                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 edit-password-btn"
                         data-role="teacher"
-                        data-user-id="{{ t.user.id }}">
-                        Edit
+                        data-user-id="{{ t.user.id }}"
+                        data-display-name="{{ t.display_name|default:t.user.get_full_name|default:t.user.username|escapejs }}">
+                        Edit Password
                       </button>
                       <button
                         type="button"
@@ -468,10 +469,11 @@
                       {% if is_admin %}
                       <button
                         type="button"
-                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50"
-                        data-role="admin"
-                        data-user-id="{{ a.user.id }}">
-                        Edit
+                        class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 edit-password-btn"
+                        data-role="teacher"
+                        data-user-id="{{ a.user.id }}"
+                        data-display-name="{{ a.display_name|default:a.user.get_full_name|default:a.user.username|escapejs }}">
+                        Edit Password
                       </button>
                       <button
                         type="button"
@@ -722,6 +724,26 @@
         </select>
       </div>
 
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">New password</label>
+        <input
+          type="password"
+          name="password"
+          id="editStudentPassword"
+          class="w-full rounded-lg border px-3 py-2 text-sm"
+          placeholder="Leave blank to keep current password">
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm new password</label>
+        <input
+          type="password"
+          name="password_confirm"
+          id="editStudentPasswordConfirm"
+          class="w-full rounded-lg border px-3 py-2 text-sm"
+          placeholder="Leave blank to keep current password">
+      </div>
+
       <div class="mt-4 flex justify-end gap-2">
         <button
           type="button"
@@ -733,6 +755,57 @@
           type="submit"
           class="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold hover:bg-brand-700">
           Save changes
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Edit password modal -->
+<div
+  id="editPasswordModal"
+  class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+  <div class="bg-white rounded-2xl shadow-lg p-6 w-full max-w-md">
+    <h3 id="editPasswordTitle" class="text-lg font-semibold mb-4">
+      Edit password
+    </h3>
+
+    <form id="editPasswordForm" method="post" action="{% url 'account_password_edit' %}" class="space-y-3">
+      {% csrf_token %}
+      <input type="hidden" name="user_id" id="editPasswordUserId">
+      <input type="hidden" name="role" id="editPasswordRole">
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">New password</label>
+        <input
+          type="password"
+          name="password"
+          id="editPasswordInput"
+          class="w-full rounded-lg border px-3 py-2 text-sm"
+          required>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Confirm new password</label>
+        <input
+          type="password"
+          name="password_confirm"
+          id="editPasswordConfirmInput"
+          class="w-full rounded-lg border px-3 py-2 text-sm"
+          required>
+      </div>
+
+      <div class="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          id="editPasswordCancel"
+          class="rounded-lg border px-4 py-2 text-sm font-semibold hover:bg-gray-50">
+          Cancel
+        </button>
+        <button
+          type="submit"
+          class="rounded-lg bg-brand-600 text-white px-4 py-2 text-sm font-semibold hover:bg-brand-700">
+          Save password
         </button>
       </div>
     </form>
@@ -931,6 +1004,52 @@
   editStudentModal.addEventListener("click", (e) => {
     if (e.target === editStudentModal) {
       editStudentModal.classList.add("hidden");
+    }
+  });
+
+  // Edit password modal logic
+  const editPasswordModal = document.getElementById("editPasswordModal");
+  const editPasswordTitle = document.getElementById("editPasswordTitle");
+  const editPasswordUserIdInput = document.getElementById("editPasswordUserId");
+  const editPasswordRoleInput = document.getElementById("editPasswordRole");
+  const editPasswordForm = document.getElementById("editPasswordForm");
+  const editPasswordCancel = document.getElementById("editPasswordCancel");
+  const editPasswordButtons = document.querySelectorAll(".edit-password-btn");
+
+  function openEditPasswordModal(userId, role, displayName) {
+    editPasswordUserIdInput.value = userId;
+    editPasswordRoleInput.value = role;
+
+    const capitalized = role.charAt(0).toUpperCase() + role.slice(1);
+    editPasswordTitle.textContent = "Edit " + capitalized + " Password";
+
+    if (displayName) {
+      editPasswordTitle.textContent += " - " + displayName;
+    }
+
+    editPasswordForm.reset();
+    editPasswordUserIdInput.value = userId;
+    editPasswordRoleInput.value = role;
+
+    editPasswordModal.classList.remove("hidden");
+  }
+
+  editPasswordButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const userId = btn.dataset.userId;
+      const role = btn.dataset.role;
+      const displayName = btn.dataset.displayName || "";
+      openEditPasswordModal(userId, role, displayName);
+    });
+  });
+
+  editPasswordCancel.addEventListener("click", () => {
+    editPasswordModal.classList.add("hidden");
+  });
+
+  editPasswordModal.addEventListener("click", (e) => {
+    if (e.target === editPasswordModal) {
+      editPasswordModal.classList.add("hidden");
     }
   });
 

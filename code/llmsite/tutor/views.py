@@ -344,6 +344,38 @@ def account_create(request):
 @require_http_methods(["POST"])
 @login_required
 @user_passes_test(is_admin)
+def account_password_edit(request):
+    user_id_raw = request.POST.get("user_id")
+    pw = request.POST.get("password")
+    pwc = request.POST.get("password_confirm")
+
+
+    if pw == pwc:
+        
+        # Guard against missing or non numeric student id
+        try:
+            user_id = int(user_id_raw)
+        except (TypeError, ValueError):
+            return redirect("dashboard")
+
+
+        User = get_user_model()
+
+
+        try:
+            user = User.objects.get(id=user_id)
+            user.set_password(pw)
+            user.save()
+
+        except User.DoesNotExist:
+            pass
+        
+    return redirect("dashboard")
+
+
+@require_http_methods(["POST"])
+@login_required
+@user_passes_test(is_admin)
 def account_delete(request):
     User = get_user_model()
 
@@ -374,6 +406,8 @@ def student_edit(request):
     student_id_raw = request.POST.get("student_id")
     classes = (request.POST.get("classes") or "").strip()
     teacher_id_raw = request.POST.get("teacher_id")
+    pw = request.POST.get("password")
+    pwc = request.POST.get("password_confirm")
 
     # Guard against missing or non numeric student id
     try:
@@ -398,7 +432,10 @@ def student_edit(request):
             teacher = None
 
     student.teacher = teacher
+    if pw == pwc:
+        student.user.set_password(pw)
     student.save()
+    student.user.save()
 
     return redirect("dashboard")
 
