@@ -1037,7 +1037,14 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-    messages = [{"role": c.role, "text": c.message} for c in chats]
+    # Hide system prompts from the UI. They are persisted so the LLM can
+    # reconstruct context in _load_messages_from_db, but they must never be
+    # shown to the student when viewing chat history (issue #35).
+    messages = [
+        {"role": c.role, "text": c.message}
+        for c in chats
+        if c.role != "system"
+    ]
 
     quiz_attempts = []
     quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
