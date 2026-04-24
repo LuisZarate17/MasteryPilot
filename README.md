@@ -1,4 +1,4 @@
-## System for AI Tutoring
+## MasteryPilot
 
 ## Project summary
 
@@ -13,12 +13,12 @@ This AI tutoring system enables school districts to offer personalized learning 
 ### Prerequisites
 
 - Python 3.13 or newer
-- Pip packages: google-generativeai, python-dotenv, django
-- Gemini API key (Insert into .env file with the format: GEMINI_API_KEY="your api key")
 
 ### Add-ons
 
-- Google Gemini API - Serves as the large-language model for the prototype system.
+- Qwen3 - One of three LLM modules you can use (Default module)
+- LLaMA - One of three LLM modules you can use (Requires license from Meta)
+- Mistral - One of three LLM modules you can use
 
 ### Installation Steps
 
@@ -27,24 +27,11 @@ This AI tutoring system enables school districts to offer personalized learning 
 git clone https://github.com/Zelefant/CPTS421-AI-Tutor.git
 cd CPTS421-AI-Tutor
 ```
-2. Create and activate a virtual environment:
+2. Run setup.sh:
 ```
-python -m venv .venv # Windows
-.venv\Scripts\activate # macOS/Linux
-source .venv/bin/activate
+source ./setup.sh
 ```
-3. Upgrade pip and install dependencies:
-```
-pip install --upgrade pip
-pip install google-generativeai python-dotenv django
-```
-4. Create a .env file in the folder "code" and add your Gemini API key:
-```
-GEMINI_API_KEY="your-api-key-here"
-```
-5. cd into the "llmsite" folder
-6. Run the command: `python manage.py runserver`
-7. Go to `http://127.0.0.1:8000` or whatever the IP address and port the command gives you.
+3. When finished, go to the IP address and port listed in the console
 
 ## Functionality
 
@@ -52,16 +39,13 @@ GEMINI_API_KEY="your-api-key-here"
 2. The AI tutor will introduce itself and display the initial instructions.
 3. Enter a message describing the topic or problem you want help with.
 4. The tutor will respond with one step at a time. After completing the step, ask it to continue or ask for clarification.
-5. Request quizzes or practice exams by asking the tutor; it will provide them in JSON format.
-6. Submit quiz answers in CSV format; the tutor will return a graded JSON answer key.
-7. The system maintains safeguards to prevent inappropriate content and adheres to the structured step-by-step approach.
+5. Request quizzes by asking the tutor; it will provide them in a specially formatted quiz UI.
+6. The system maintains safeguards to prevent inappropriate content and adheres to the structured step-by-step approach.
 
 
 ## Known Problems
 
-- Tutor requires internet access to use the Gemini API.
-- Using a local LLM is not yet implemented (#5).
-- All issues are tracked in GitHub, see the Incomplete Issues/User Stories section in the sprint report.
+- Model Swapper is not functional with the current version of the product. To swap the LLM, you must access code/llmsite/llmsite/settings.py and change LLM_MODULE to either "qwen", "mistral" or "llama" depending on the model you wish to use.
 
 
 ## Contributing
@@ -82,7 +66,7 @@ GEMINI_API_KEY="your-api-key-here"
 - [Model Selector Utility](docs/MODEL_SELECTOR.md) - Notes for the separate Windows model configuration tool.
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md) - Current technical and operational limits.
 
-- [Sprint 4 Report](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/docs/Reports/Sprint-4%20report.md) – Sprint 4 latest overview of work completed and unfinished work.
+- [Sprint 6 Report]() – Sprint 6 latest overview of work completed and unfinished work.
 - [GitHub Issues](https://github.com/Zelefant/CPTS421-AI-Tutor/issues) - Current issues, user stories, and progress tracking.
 
 ## License
