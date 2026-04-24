@@ -94,6 +94,38 @@ def InitializationPrompt(studentName, studentSchool, studentGrade, studentClasse
 
     return INITIALIZATION_PROMPT_2
 
+_TITLE_SYSTEM_PROMPT = (
+    "You name chat sessions for a student tutoring app. "
+    "Read the student's first message and reply with ONLY a 1-3 word topic "
+    "title (no quotes, no punctuation, Title Case). "
+    "If the message is gibberish, empty, a greeting, or has no clear topic, "
+    "reply with exactly: NONE"
+)
+
+def DeriveSessionTitle(model, tokenizer, first_message: str) -> str:
+    text = (first_message or "").strip()
+    if not text:
+        return ""
+    messages = [
+        {"role": "system", "content": _TITLE_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Message: {text}"},
+    ]
+    try:
+        chat_template = """{% for message in messages %}<|{{ message['role'] }}|>\n{{ message['content'] }}\n{% endfor %}<|assistant|>\n"""
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, chat_template=chat_template)
+        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+        outputs = model.generate(**inputs, max_new_tokens=16, eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.eos_token_id)
+        reply = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        raw = reply.split("<|assistant|>")[-1].strip()
+    except Exception:
+        return ""
+    title = (raw or "").strip().strip('"').strip("'").strip()
+    if not title or title.upper() == "NONE":
+        return ""
+    if len(title) > 40:
+        title = title[:40].rstrip()
+    return title
+
 def StartChat(model, tokenizer, studentName, studentSchool, studentGrade, studentClasses):
     print("Chat has started")
     messages = [
