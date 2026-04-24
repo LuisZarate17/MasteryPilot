@@ -2,10 +2,10 @@
 {% extends "base.html" %}
 {% block title %}Chat · MasteryPilot{% endblock %}
 {% block content %}
-<div class="grid lg:grid-cols-[240px_minmax(0,1fr)_240px] gap-6">
+<div class="grid lg:grid-cols-[240px_minmax(0,1fr)] gap-6">
 
   <!-- Left Sidebar (Sessions) -->
-  <aside class="bg-white rounded-2xl border shadow-sm p-4">
+  <aside class="bg-white rounded-2xl border shadow-sm p-4 self-start">
     <div class="flex items-center justify-between mb-2">
       <h3 class="font-semibold">Sessions</h3>
     </div>
@@ -16,7 +16,7 @@
   </aside>
 
   <!-- Main Chat Window -->
-  <section class="bg-white rounded-2xl border shadow-sm flex flex-col">
+  <section class="bg-white rounded-2xl border shadow-sm flex flex-col w-full max-w-3xl mx-auto h-[calc(100vh-7.5rem)]">
 
     <div id="chatLog" class="flex-1 overflow-y-auto p-5 space-y-4">
       <div class="flex gap-3">
@@ -27,22 +27,6 @@
       </div>
     </div>
   </section>
-
-  <!-- Right Sidebar (Notes / Resources) -->
-  <aside class="bg-white rounded-2xl border shadow-sm p-4">
-    <h3 class="font-semibold">Lesson Notes</h3>
-    <ul class="list-disc list-inside text-sm text-gray-700 mt-2 space-y-1">
-      <li>Goal: Master factoring quadratics</li>
-      <li>Tip: Look for GCF first</li>
-      <li>Example: x² + 5x + 6 = (x+2)(x+3)</li>
-    </ul>
-
-    <h3 class="font-semibold mt-6">Resources</h3>
-    <div class="mt-2 space-y-2 text-sm">
-      <a class="block rounded-lg border p-2 hover:bg-gray-50" href="#">📄 PDF: Practice Problems</a>
-      <a class="block rounded-lg border p-2 hover:bg-gray-50" href="#">🎥 Video: Step-by-step Tutorial</a>
-    </div>
-  </aside>
 </div>
 {% endblock %}
 

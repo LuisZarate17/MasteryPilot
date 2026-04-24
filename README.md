@@ -74,6 +74,14 @@ GEMINI_API_KEY="your-api-key-here"
 
 ## Additional Documentation
 
+- [Documentation Index](docs/README.md) - Entry point for sponsor handoff, deployment, admin, and user documentation.
+- [Handoff Overview](docs/HANDOFF_OVERVIEW.md) - Sponsor-facing project summary and scope.
+- [Deployment Guide](docs/DEPLOYMENT.md) - Technical setup and operational guidance for the Django application.
+- [Admin Operations Guide](docs/ADMIN_OPERATIONS.md) - Staff workflows for accounts, curriculum, exports, and maintenance.
+- [User Manual](docs/USER_MANUAL.md) - Client-facing usage guide for students, teachers, and admins.
+- [Model Selector Utility](docs/MODEL_SELECTOR.md) - Notes for the separate Windows model configuration tool.
+- [Known Limitations](docs/KNOWN_LIMITATIONS.md) - Current technical and operational limits.
+
 - [Sprint 4 Report](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/docs/Reports/Sprint-4%20report.md) – Sprint 4 latest overview of work completed and unfinished work.
 - [GitHub Issues](https://github.com/Zelefant/CPTS421-AI-Tutor/issues) - Current issues, user stories, and progress tracking.
 

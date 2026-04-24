@@ -2,7 +2,6 @@ from django.http import FileResponse, Http404, HttpResponseRedirect, JsonRespons
 from django.contrib.auth.models import AnonymousUser
 from django.shortcuts import render
 from django.views.decorators.http import require_http_methods, require_GET
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
@@ -15,15 +14,12 @@ import os
 import re
 import csv
 
-#from languagemodel_legacy import *
+# DeriveSessionTitle is dispatched per-module in _derive_session_title()
 from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile
 from tutor.globals import GetModelAndTokenizer
-
-# in-memory registry for prototype use
-CHAT_REGISTRY = {}
 
 model = None
 tokenizer = None
@@ -41,6 +37,25 @@ def _get_local_llm_fns():
     elif settings.LLM_MODULE == "llama":
         from languagemodel_llama import InitModel, StartChat, SendMessage
         return InitModel, StartChat, SendMessage
+
+def _derive_session_title(first_message: str) -> str:
+    """Dispatch DeriveSessionTitle to the correct LLM module."""
+    try:
+        if settings.GEMINI_ENABLED:
+            from languagemodel_legacy import DeriveSessionTitle
+            return DeriveSessionTitle(first_message)
+        elif settings.LLM_MODULE == "qwen":
+            from languagemodel_qwen import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+        elif settings.LLM_MODULE == "mistral":
+            from languagemodel_mistral import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+        elif settings.LLM_MODULE == "llama":
+            from languagemodel_llama import DeriveSessionTitle
+            return DeriveSessionTitle(model, tokenizer, first_message)
+    except Exception as e:
+        print(f"[_derive_session_title] error: {e}")
+    return ""
 
 def ensure_llm_initialized():
     """
@@ -83,6 +98,19 @@ def _session_id(request):
     if not request.session.session_key:
         request.session.save()
     return request.session.session_key
+
+
+def _load_messages_from_db(request):
+    """Reconstruct the LLM messages list from DB for the current session."""
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return None
+    try:
+        session = Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return None
+    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")
+    return [{"role": c.role, "content": c.message} for c in chats]
 
 
 def _split_full_name(full_name: str) -> tuple[str, str, str]:
@@ -148,6 +176,28 @@ def _try_extract_quiz_json(text: str):
         return {"test": obj}
 
     return None
+
+
+def _maybe_persist_quiz(session, assistant_reply_text):
+    """
+    If the assistant reply parses as a quiz JSON, supersede any existing
+    active quiz on this session and create a new active Quiz row so the
+    grading endpoint has something to score.
+    Returns True if a quiz was persisted.
+    """
+    quiz_json = _try_extract_quiz_json(assistant_reply_text)
+    if not quiz_json:
+        return False
+    Quiz.objects.filter(session=session, status="active").update(
+        status="submitted",
+        ended_at=timezone.now(),
+    )
+    Quiz.objects.create(
+        session=session,
+        status="active",
+        quiz_json=quiz_json,
+    )
+    return True
 
 
 @login_required
@@ -257,12 +307,17 @@ def dashboard_page(request):
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
+
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        raise Http404("Invalid file path")
 
     if not os.path.exists(path):
         raise Http404("File not found")
 
-    return FileResponse(open(path, "rb"), as_attachment=False)
+    with open(path, "rb") as f:
+        return FileResponse(f, as_attachment=False)
 
 
 @login_required
@@ -270,8 +325,11 @@ def curriculum_view(request, filename):
 @require_http_methods(["POST"])
 def curriculum_delete(request):
     filename = request.POST.get("filename") or ""
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
 
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        return redirect("dashboard")
 
     if os.path.exists(path):
         os.remove(path)
@@ -440,7 +498,6 @@ def student_edit(request):
     return redirect("dashboard")
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_new_session(request):
@@ -505,10 +562,6 @@ def api_new_session(request):
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
-    # store in-memory registry (keep consistent format)
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
-
     # persist messages to DB
     for m in messages:
         role = m.get("role")
@@ -531,8 +584,8 @@ def api_new_session(request):
     })
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
+@login_required
 def api_init(request):
     import time
     print("api_init called at", time.time())
@@ -570,7 +623,6 @@ def api_init(request):
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
-        CHAT_REGISTRY[sid] = messages
         return JsonResponse({"ok": True, "model_text": assistant_msg})
     else:
         """
@@ -593,7 +645,6 @@ def api_init(request):
         """
         pass
 
-#@csrf_exempt
 @require_http_methods(["POST"])
 def api_chat(request):
     try:
@@ -605,8 +656,7 @@ def api_chat(request):
     if not msg:
         return HttpResponseBadRequest("message is required")
 
-    sid = _session_id(request)
-    chat = CHAT_REGISTRY.get(sid)
+    chat = _load_messages_from_db(request)
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
 
@@ -625,7 +675,6 @@ def api_chat(request):
             try:
                 SendMessage = _get_local_llm_fns()[2]
                 reply, messages = SendMessage(model, tokenizer, chat, msg)
-                CHAT_REGISTRY[sid] = messages
                 assistant_reply_text = reply if isinstance(reply, str) else None
                 if not assistant_reply_text and messages:
                     assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
@@ -690,13 +739,34 @@ def api_chat(request):
         pass
     
     # Persist to DB: only persist user + assistant when there was no model error.
+    new_session_title = None
     try:
         session_id = request.session.get("session_id")
         if session_id:
             session = Session.objects.get(id=session_id, owner=request.user)
+
+            # Auto-title from the first user message if title is still the default.
+            # Ask the LLM for a 1-3 word topic; if it returns empty (gibberish /
+            # no clear topic) leave the title alone.
+            if session.title in ("", "New session"):
+                if not DBChat.objects.filter(session=session, role="user").exists():
+                    try:
+                        derived = _derive_session_title(msg)
+                    except Exception as e:
+                        print(f"[api_chat] DeriveSessionTitle error: {e}")
+                        derived = ""
+                    if derived:
+                        session.title = derived
+                        session.save(update_fields=["title"])
+                        new_session_title = session.title
+
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+                try:
+                    _maybe_persist_quiz(session, assistant_reply_text)
+                except Exception as qe:
+                    print(f"[api_chat] Quiz persistence error: {qe}")
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
@@ -704,17 +774,18 @@ def api_chat(request):
     except Exception as e:
         print(f"Chat persistence or progress calc error: {e}")
 
+    payload = {"ok": True, "model_text": assistant_reply_text}
+    if new_session_title:
+        payload["session_title"] = new_session_title
     if error_occurred:
-        return JsonResponse({"ok": True, "model_text": assistant_reply_text, "error": True})
-    else:
-        return JsonResponse({"ok": True, "model_text": assistant_reply_text})
+        payload["error"] = True
+    return JsonResponse(payload)
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
+@login_required
 def api_reset(request):
-    sid = _session_id(request)
-    CHAT_REGISTRY.pop(sid, None)
+    request.session.pop("session_id", None)
     return JsonResponse({"ok": True})
 
 
@@ -822,6 +893,13 @@ def progress_detail(request):
     return render(request, 'progress_detail.html', context)
 
 
+ALLOWED_UPLOAD_TYPES = {
+    "txt": "text/plain",
+    "pdf": "application/pdf",
+}
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
+
+
 @login_required
 @user_passes_test(is_teacher_or_admin)
 @require_http_methods(["POST"])
@@ -832,15 +910,29 @@ def upload_curriculum(request):
     if not file:
         return redirect("dashboard")
 
-    filename = get_valid_filename(file.name)
-    ext = filename.lower().split(".")[-1]
+    if file.size > MAX_UPLOAD_SIZE:
+        return redirect("dashboard")
 
-    if ext not in {"txt", "pdf"}:
+    filename = get_valid_filename(file.name)
+
+    # Validate extension: use os.path.splitext to prevent double-extension bypass
+    _, dot_ext = os.path.splitext(filename)
+    ext = dot_ext.lstrip(".").lower()
+
+    if ext not in ALLOWED_UPLOAD_TYPES:
+        return redirect("dashboard")
+
+    # Verify MIME type matches expected content type
+    if file.content_type != ALLOWED_UPLOAD_TYPES[ext]:
         return redirect("dashboard")
 
     os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)
 
-    destination = os.path.join(settings.CURRICULUM_ROOT, filename)
+    safe_name = os.path.basename(filename)
+    destination = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
+
+    if not destination.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        return redirect("dashboard")
 
     with open(destination, "wb+") as dest:
         for chunk in file.chunks():
@@ -1020,9 +1112,14 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-    messages = [{"role": c.role, "text": c.message} for c in chats]
-
-    llm_messages = [{"role": c.role, "content": c.message} for c in chats]
+    # Hide system prompts from the UI. They are persisted so the LLM can
+    # reconstruct context in _load_messages_from_db, but they must never be
+    # shown to the student when viewing chat history (issue #35).
+    messages = [
+        {"role": c.role, "text": c.message}
+        for c in chats
+        if c.role != "system"
+    ]
 
     quiz_attempts = []
     quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
@@ -1074,9 +1171,6 @@ def api_session_messages(request, session_id):
             "items": items,
         })
 
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = llm_messages
-
     # set the active session for subsequent api_chat persistence
     if not is_teacher_or_admin(request.user):
         request.session['session_id'] = str(session.id)
@@ -1084,7 +1178,6 @@ def api_session_messages(request, session_id):
     return JsonResponse({"ok": True, "messages": messages, "quiz_attempts": quiz_attempts})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_session_init(request, session_id):
@@ -1112,9 +1205,6 @@ def api_session_init(request, session_id):
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
 
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
-
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
@@ -1127,17 +1217,14 @@ def api_session_init(request, session_id):
     return JsonResponse({"ok": True, "model_text": assistant_msg or "Hello!"})
 
 
-@csrf_exempt
 @require_http_methods(["DELETE"])
 @login_required
 def api_delete_session(request, session_id):
     session = get_object_or_404(Session, id=session_id, owner=request.user)
-    CHAT_REGISTRY.pop(str(session_id), None)
     session.delete()
     return JsonResponse({"ok": True, "status": "deleted"})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_rename_session(request, session_id):
@@ -1154,14 +1241,12 @@ def api_rename_session(request, session_id):
     return JsonResponse({"ok": True, "id": str(session.id), "title": session.title})
 
 
-@csrf_exempt
 @require_http_methods(["POST"])
 @login_required
 def api_select_session(request, session_id):
     """
-    Select an existing DB session. Sets request.session['session_id'] and
-    rebuilds CHAT_REGISTRY for this user session from DB messages so
-    subsequent api_chat works and persists messages correctly.
+    Select an existing DB session. Sets request.session['session_id'] so
+    subsequent api_chat calls persist messages to the correct session.
     """
     try:
         session = Session.objects.get(id=session_id, owner=request.user)
@@ -1169,12 +1254,6 @@ def api_select_session(request, session_id):
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
     request.session['session_id'] = str(session.id)
-
-    chats = DBChat.objects.filter(session=session).order_by('id')
-    messages = [{"role": c.role, "content": c.message} for c in chats]
-
-    sid = _session_id(request)
-    CHAT_REGISTRY[sid] = messages
 
     return JsonResponse({"ok": True})
 
@@ -1297,6 +1376,13 @@ def api_grade_quiz(request):
         answers_json=answers_json,
         graded_json=graded_json,
     )
+
+    # Refresh cached StudentProgress so the dashboard quiz_average reflects
+    # this attempt immediately. A recompute failure must not fail grading.
+    try:
+        calculate_student_progress(request.user)
+    except Exception as pe:
+        print(f"[api_grade_quiz] Progress recompute error: {pe}")
 
     # Return structured JSON (frontend will parse and display it)
     feedback_json = json.dumps(graded_feedback)

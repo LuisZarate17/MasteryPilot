@@ -211,7 +211,7 @@ def _build_chat_text(tokenizer, messages, add_generation_prompt: bool) -> str:
     )
 
 
-def _generate_assistant_turn(model, tokenizer, messages_for_generation, max_new_tokens=200, temperature=0.4) -> str:
+def _generate_assistant_turn(model, tokenizer, messages_for_generation, max_new_tokens=1024, temperature=0.4) -> str:
     """
     Generates only the assistant continuation.
 
@@ -246,6 +246,32 @@ def _generate_assistant_turn(model, tokenizer, messages_for_generation, max_new_
     assistant_text = tokenizer.decode(assistant_ids, skip_special_tokens=True).strip()
     return assistant_text
 
+_TITLE_SYSTEM_PROMPT = (
+    "You name chat sessions for a student tutoring app. "
+    "Read the student's first message and reply with ONLY a 1-3 word topic "
+    "title (no quotes, no punctuation, Title Case). "
+    "If the message is gibberish, empty, a greeting, or has no clear topic, "
+    "reply with exactly: NONE"
+)
+
+def DeriveSessionTitle(model, tokenizer, first_message: str) -> str:
+    text = (first_message or "").strip()
+    if not text:
+        return ""
+    messages = [
+        {"role": "system", "content": _TITLE_SYSTEM_PROMPT},
+        {"role": "user", "content": f"Message: {text}"},
+    ]
+    try:
+        raw = _generate_assistant_turn(model, tokenizer, messages, max_new_tokens=16, temperature=0.3)
+    except Exception:
+        return ""
+    title = (raw or "").strip().strip('"').strip("'").strip()
+    if not title or title.upper() == "NONE":
+        return ""
+    if len(title) > 40:
+        title = title[:40].rstrip()
+    return title
 
 def StartChat(model, tokenizer, studentName, studentSchool, studentGrade, studentClasses):
     print("Chat has started")
