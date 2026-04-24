@@ -14,6 +14,9 @@ lib/
 lib64/
 pyvenv.cfg
 
+# Other
+curriculum/
+
 # Byte-compiled / cached files
 *.pyc
 *$py.class

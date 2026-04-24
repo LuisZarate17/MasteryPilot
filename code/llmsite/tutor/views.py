@@ -7,6 +7,7 @@ from django.contrib.auth import login, get_user_model
 from django.shortcuts import render, redirect, get_object_or_404
 from django.conf import settings
 from django.utils import timezone
+from django.utils._os import safe_join
 from django.utils.text import get_valid_filename
 from .forms import SignupForm, UploadRagForm
 import json
@@ -307,18 +308,15 @@ def dashboard_page(request):
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
-    safe_name = os.path.basename(filename)
-    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
-
-    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+    try:
+        path = safe_join(settings.CURRICULUM_ROOT, filename)
+    except ValueError:
         raise Http404("Invalid file path")
 
-    if not os.path.exists(path):
+    if not os.path.isfile(path):
         raise Http404("File not found")
 
-    with open(path, "rb") as f:
-        return FileResponse(f, as_attachment=False)
-
+    return FileResponse(open(path, "rb"), as_attachment=False)
 
 @login_required
 @user_passes_test(is_admin)
