@@ -154,7 +154,7 @@ def StartChat(model, tokenizer, studentName, studentSchool, studentGrade, studen
     chat_prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, chat_template=chat_template)
 
     inputs = tokenizer(chat_prompt, return_tensors="pt").to(model.device)
-    outputs = model.generate(**inputs, max_new_tokens=350, eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.eos_token_id)
+    outputs = model.generate(**inputs, max_new_tokens=1024, eos_token_id=tokenizer.eos_token_id, pad_token_id=tokenizer.eos_token_id)
 
     #print("Decoded output (raw):")
     #print(tokenizer.decode(outputs[0]))
@@ -197,7 +197,7 @@ def SendMessage(model, tokenizer, messages, new_message):
 
     outputs = model.generate(
         **inputs,
-        max_new_tokens=350,
+        max_new_tokens=1024,
         temperature=0.4,
         eos_token_id=tokenizer.eos_token_id,
         pad_token_id=tokenizer.eos_token_id

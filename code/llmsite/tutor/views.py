@@ -178,6 +178,28 @@ def _try_extract_quiz_json(text: str):
     return None
 
 
+def _maybe_persist_quiz(session, assistant_reply_text):
+    """
+    If the assistant reply parses as a quiz JSON, supersede any existing
+    active quiz on this session and create a new active Quiz row so the
+    grading endpoint has something to score.
+    Returns True if a quiz was persisted.
+    """
+    quiz_json = _try_extract_quiz_json(assistant_reply_text)
+    if not quiz_json:
+        return False
+    Quiz.objects.filter(session=session, status="active").update(
+        status="submitted",
+        ended_at=timezone.now(),
+    )
+    Quiz.objects.create(
+        session=session,
+        status="active",
+        quiz_json=quiz_json,
+    )
+    return True
+
+
 @login_required
 def landing_page(request):
     """
@@ -285,12 +307,17 @@ def dashboard_page(request):
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
+
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        raise Http404("Invalid file path")
 
     if not os.path.exists(path):
         raise Http404("File not found")
 
-    return FileResponse(open(path, "rb"), as_attachment=False)
+    with open(path, "rb") as f:
+        return FileResponse(f, as_attachment=False)
 
 
 @login_required
@@ -298,8 +325,11 @@ def curriculum_view(request, filename):
 @require_http_methods(["POST"])
 def curriculum_delete(request):
     filename = request.POST.get("filename") or ""
+    safe_name = os.path.basename(filename)
+    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
 
-    path = os.path.join(settings.CURRICULUM_ROOT, filename)
+    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        return redirect("dashboard")
 
     if os.path.exists(path):
         os.remove(path)
@@ -696,6 +726,10 @@ def api_chat(request):
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+                try:
+                    _maybe_persist_quiz(session, assistant_reply_text)
+                except Exception as qe:
+                    print(f"[api_chat] Quiz persistence error: {qe}")
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
@@ -1041,7 +1075,14 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-    messages = [{"role": c.role, "text": c.message} for c in chats]
+    # Hide system prompts from the UI. They are persisted so the LLM can
+    # reconstruct context in _load_messages_from_db, but they must never be
+    # shown to the student when viewing chat history (issue #35).
+    messages = [
+        {"role": c.role, "text": c.message}
+        for c in chats
+        if c.role != "system"
+    ]
 
     quiz_attempts = []
     quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
@@ -1298,6 +1339,13 @@ def api_grade_quiz(request):
         answers_json=answers_json,
         graded_json=graded_json,
     )
+
+    # Refresh cached StudentProgress so the dashboard quiz_average reflects
+    # this attempt immediately. A recompute failure must not fail grading.
+    try:
+        calculate_student_progress(request.user)
+    except Exception as pe:
+        print(f"[api_grade_quiz] Progress recompute error: {pe}")
 
     # Return structured JSON (frontend will parse and display it)
     feedback_json = json.dumps(graded_feedback)

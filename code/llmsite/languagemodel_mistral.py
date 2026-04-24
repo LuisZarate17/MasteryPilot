@@ -136,7 +136,7 @@ def _build_chat_text(tokenizer, messages, add_generation_prompt: bool) -> str:
     )
 
 
-def _generate_assistant_turn(model, tokenizer, messages_for_generation, max_new_tokens=350, temperature=0.4) -> str:
+def _generate_assistant_turn(model, tokenizer, messages_for_generation, max_new_tokens=1024, temperature=0.4) -> str:
     """
     Generates only the assistant continuation.
 

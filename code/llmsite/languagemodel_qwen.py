@@ -178,7 +178,7 @@ def _generate_assistant_turn(
     model,
     tokenizer,
     messages_for_generation,
-    max_new_tokens=200,
+    max_new_tokens=1024,
     temperature=0.7,
     top_p=0.8,
     top_k=20
