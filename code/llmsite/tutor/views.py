@@ -1112,13 +1112,30 @@ def api_session_messages(request, session_id):
         return JsonResponse({"error": "Access denied"}, status=403)
 
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
-    # Hide system prompts from the UI. They are persisted so the LLM can
+    # Hide bootstrap messages from the UI. They are persisted so the LLM can
     # reconstruct context in _load_messages_from_db, but they must never be
     # shown to the student when viewing chat history (issue #35).
+    # Two things to hide:
+    #   1. role="system" rows (the tutor instructions block)
+    #   2. The auto-generated "Here is your student information..." (local
+    #      LLMs) / "Name: ...\nSchool: ...\nGrade: ..." (Gemini) user message
+    #      that the backend sends on StartChat — the student never typed it.
+    def _is_bootstrap_user_message(text: str) -> bool:
+        if not text:
+            return False
+        stripped = text.lstrip()
+        if stripped.startswith("Here is your student information"):
+            return True
+        # Gemini bootstrap shape: starts with "Name:" plus School + Grade lines
+        if stripped.startswith("Name:") and "School:" in stripped and "Grade:" in stripped:
+            return True
+        return False
+
     messages = [
         {"role": c.role, "text": c.message}
         for c in chats
         if c.role != "system"
+        and not (c.role == "user" and _is_bootstrap_user_message(c.message))
     ]
 
     quiz_attempts = []
