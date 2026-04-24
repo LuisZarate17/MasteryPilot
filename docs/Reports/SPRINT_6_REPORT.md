@@ -2,64 +2,45 @@
 ## YouTube link of Sprint * Video (Make this video unlisted)
 
 ## What's New (User Facing)
-* Feature 1 or Bug Fix 1
-* Feature 2 or Bug Fix 2
-* Feature n or Bug Fix n
+* Made ready for deployment and release
+* LLM optimization improvements (massive speedup times on GPU-accelerated systems)
+* Polishing of the UI
+* End user documentation
 
 ## Work Summary (Developer Facing)
-Provide a one paragraph synposis of what your team accomplished this sprint. Don't
-repeat the "What's New" list of features. Instead, help the instructor understand
-how you went about the work described there, any barriers you overcame, and any
-significant learnings for your team.
+Our team prepared the system for deployment and delivery to the client. This included cleaning up any placeholder icons or UI elements, removing backdoors and polishing everything for an end user to use. We also made massive improvements to LLM response times by implementing the GPU-accelerated version of Torch into our application. Documentation was also created for teachers, admins and students to understand how to use the application effectively and safely.
 
 ## Unfinished Work
-If applicable, explain the work you did not finish in this sprint. For issues/user
-stories in the current sprint that have not been closed, (a) any progress toward
-completion of the issues has been clearly tracked (by checking the checkboxes of
-acceptance criteria), (b) a comment has been added to the issue to explain why the
-issue could not be completed (e.g., "we ran out of time" or "we did not anticipate
-it would be so much work"), and (c) the issue is added to a subsequent sprint, so
-that it can be addressed later.
+The model swapper, a previously planned feature, was not updated from last semester to work with the new module system. As such, swapping models requires modifying the settings.py file rather than a click of a button. This is all documented to make it as easy as possible for administrators, but is less convenient. In addition, the stretch goal of creating adaptive question difficulty is not possible with our current system and the time we had, so this was also scrapped.
 
 ## Completed Issues/User Stories
 Here are links to the issues that we completed in this sprint:
-* URL of issue 1
-* URL of issue 2
-* URL of issue n
-Reminders (Remove this section when you save the file):
-* Each issue should be assigned to a milestone
-* Each completed issue should be assigned to a pull request
-* Each completed pull request should include a link to a "Before and After" video
-* All team members who contributed to the issue should be assigned to it on
-GitHub
-* Each issue should be assigned story points using a label
-* Story points contribution of each team member should be indicated in a comment
+* [#7 - Privacy Features and Documentation](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7)
+* [#22 - Bulk Generate Student Accounts with CSV](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/22)
 
 ## Incomplete Issues/User Stories
 Here are links to issues we worked on but did not complete in this sprint:
-* URL of issue 1 <<One sentence explanation of why issue was not completed>>
-* URL of issue 2 <<One sentence explanation of why issue was not completed>>
-* URL of issue n <<One sentence explanation of why issue was not completed>>
-Examples of explanations (Remove this section when you save the file):
-* "We ran into a complication we did not anticipate (explain briefly)."
-* "We decided that the feature did not add sufficient value for us to work on it
-in this sprint (explain briefly)."
-* "We could not reproduce the bug" (explain briefly).
-* "We did not get to this issue because..." (explain briefly)
+* [#21 - Program to make swapping models less technical](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21) <<The aforementioned model swapper was not updated to work with the LLM module system we created during the second semester.>>
+* [#8 - Adaptive question difficulty](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8) <<Scrapped stretch goal we never were able to reach>>
 
 ## Code Files for Review
 Please review the following code files, which were actively developed during this
 sprint, for quality:
-* [Name of code file 1](https://github.com/your_repo/file_extension)
-* [Name of code file 2](https://github.com/your_repo/file_extension)
-* [Name of code file 3](https://github.com/your_repo/file_extension)
+* [languagemodel_llama.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel_llama.py)
+* [languagemodel_mistral.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel_mistral.py)
+* [languagemodel_qwen.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel_qwen.py)
+* [views.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/views.py)
+* [chat_api.html](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/templates/chat_api.html)
+* [dashboard_admin_mentor.html](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/templates/dashboard_admin_mentor.html)
+* [progress_detail.html](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/templates/progress_detail.html)
 
 ## Retrospective Summary
 Here's what went well:
-* Item 1
-* Item 2
-* Item x
+* Polishing and bug fixes
+* Communication with the client
+* Documentation creation
+* Deployment and delivery to client
+
 Here's what we'd like to improve:
-* Item 1
-* Item 2
-* Item x
+* Model swapper functionality
+* More bug fixes to the system
