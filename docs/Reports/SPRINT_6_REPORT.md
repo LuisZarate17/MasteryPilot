@@ -20,8 +20,10 @@ Here are links to the issues that we completed in this sprint:
 
 ## Incomplete Issues/User Stories
 Here are links to issues we worked on but did not complete in this sprint:
-* [#21 - Program to make swapping models less technical](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21) <<The aforementioned model swapper was not updated to work with the LLM module system we created during the second semester.>>
-* [#8 - Adaptive question difficulty](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8) <<Scrapped stretch goal we never were able to reach>>
+* [#21 - Program to make swapping models less technical](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21)
+The aforementioned model swapper was not updated to work with the LLM module system we created during the second semester.
+* [#8 - Adaptive question difficulty](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8)
+Scrapped stretch goal we never were able to reach.
 
 ## Code Files for Review
 Please review the following code files, which were actively developed during this
