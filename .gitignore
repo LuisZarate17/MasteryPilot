@@ -14,6 +14,15 @@ lib/
 lib64/
 pyvenv.cfg
 
+# === .NET build output (model_selector_app) ===
+obj/
+[Bb]in/
+*.exe
+*.pdb
+
+# === Archives ===
+*.zip
+
 # Other
 curriculum/
 
