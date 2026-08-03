@@ -1,5 +1,12 @@
 ## MasteryPilot
 
+> **Team capstone project** (WSU CPT_S 421/423). Built by [Zelefant](https://github.com/Zelefant),
+> [Jesse Boakye](https://github.com/jesseboakye), and [Luis Zarate](https://github.com/LuisZarate17).
+> This is Luis Zarate's copy of the team repository, preserving the full commit history.
+> Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
+
+**Stack:** Python 3.13 · Django · SQLite · local LLM inference (Qwen3 / LLaMA / Mistral) · hybrid RAG retrieval
+
 ## Project summary
 
 A system for school districts to create individual AI tutors for their students, following their own curriculums and learning paths with teacher guidance.
@@ -24,8 +31,8 @@ This AI tutoring system enables school districts to offer personalized learning 
 
 1. Clone the repository:
 ```
-git clone https://github.com/Zelefant/CPTS421-AI-Tutor.git
-cd CPTS421-AI-Tutor
+git clone https://github.com/Zelefant/MasteryPilot.git
+cd MasteryPilot
 ```
 2. Run setup.sh:
 ```
@@ -66,8 +73,8 @@ source ./setup.sh
 - [Model Selector Utility](docs/MODEL_SELECTOR.md) - Notes for the separate Windows model configuration tool.
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md) - Current technical and operational limits.
 
-- [Sprint 6 Report]() – Sprint 6 latest overview of work completed and unfinished work.
-- [GitHub Issues](https://github.com/Zelefant/CPTS421-AI-Tutor/issues) - Current issues, user stories, and progress tracking.
+- [Sprint 6 Report](docs/Reports/SPRINT_6_REPORT.md) – Sprint 6 latest overview of work completed and unfinished work.
+- [GitHub Issues](https://github.com/Zelefant/MasteryPilot/issues) - Current issues, user stories, and progress tracking.
 
 ## License
 
