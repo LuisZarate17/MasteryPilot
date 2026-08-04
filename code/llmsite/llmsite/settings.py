@@ -200,7 +200,15 @@ SECURE_COOKIES = _env_flag("DJANGO_SECURE_COOKIES", not DEBUG)
 
 CSRF_COOKIE_SECURE = SECURE_COOKIES
 SESSION_COOKIE_SECURE = SECURE_COOKIES
-SECURE_SSL_REDIRECT = SECURE_COOKIES
+
+# Redirecting HTTP to HTTPS is opt-in and off by default, unlike the cookie
+# flags above. It is not safe to infer from DEBUG: this project's own
+# setup.sh serves plain HTTP with no proxy, and behind a TLS-terminating
+# proxy an unconditional redirect loops forever unless Django is also told
+# how to recognise an already-secure request. Turn both on together.
+SECURE_SSL_REDIRECT = _env_flag("DJANGO_SECURE_SSL_REDIRECT", False)
+if _env_flag("DJANGO_TRUST_PROXY_SSL_HEADER", False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # Note: CSRF_COOKIE_HTTPONLY must remain False because the frontend
 # reads the CSRF token from the cookie via JavaScript (getCookie("csrftoken")).

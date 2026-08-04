@@ -85,6 +85,7 @@ Recommended:
 
 - `DJANGO_ALLOWED_HOSTS` — add the server's LAN IP or DNS name.
 - `DJANGO_SECURE_COOKIES` — `1` behind TLS, `0` on plain HTTP. Session and CSRF cookies are marked Secure when on; leaving it on without TLS prevents the browser from sending the CSRF token and breaks login.
+- `DJANGO_SECURE_SSL_REDIRECT` — `1` to redirect HTTP to HTTPS. Off by default and deliberately independent of the setting above, because enabling it without TLS makes the site unreachable. If you terminate TLS at a proxy, set `DJANGO_TRUST_PROXY_SSL_HEADER=1` at the same time or the redirect will loop indefinitely. The `setup.sh` deployment serves plain HTTP with no proxy, so both stay off there.
 
 Depending on model strategy, operators may also need:
 
