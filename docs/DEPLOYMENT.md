@@ -66,8 +66,8 @@ The local-model stack is substantially heavier than the quick-start instructions
 
 Current settings in `code/llmsite/llmsite/settings.py` include:
 
-- `DEBUG = False`
-- `ALLOWED_HOSTS = ["*"]`
+- `DEBUG` — from `DJANGO_DEBUG`, defaults to `False`
+- `ALLOWED_HOSTS` — from `DJANGO_ALLOWED_HOSTS`, defaults to `localhost,127.0.0.1`
 - SQLite database at `BASE_DIR / "db.sqlite3"`
 - `STATIC_ROOT = BASE_DIR / "staticfiles"`
 - `CURRICULUM_ROOT = BASE_DIR / "curriculum"`
@@ -76,9 +76,15 @@ Current settings in `code/llmsite/llmsite/settings.py` include:
 
 ### Required environment values
 
-At minimum, deployments should define:
+`.env.example` in the repository root is the authoritative list. At minimum, deployments must define:
 
-- `DJANGO_SECRET_KEY`
+- `DJANGO_SECRET_KEY` — the application raises `ImproperlyConfigured` at startup without it whenever `DJANGO_DEBUG` is off. There is no production fallback.
+- `ADMIN_PASS` — the password for the initial administrator account, read once by migration `tutor/0002`. There is no default password; if this is unset, no admin account is created.
+
+Recommended:
+
+- `DJANGO_ALLOWED_HOSTS` — add the server's LAN IP or DNS name.
+- `DJANGO_SECURE_COOKIES` — `1` behind TLS, `0` on plain HTTP. Session and CSRF cookies are marked Secure when on; leaving it on without TLS prevents the browser from sending the CSRF token and breaks login.
 
 Depending on model strategy, operators may also need:
 
@@ -87,13 +93,13 @@ Depending on model strategy, operators may also need:
 
 ### Environment file handling
 
-`setup.sh` writes an environment file to `/etc/llmsite/llmsite.env` containing:
+Django loads a `.env` file from the repository root at startup (`load_dotenv` in `settings.py`).
 
-- `DJANGO_SETTINGS_MODULE`
-- `DJANGO_SECRET_KEY`
-- `DJANGO_DEBUG`
+`setup.sh` instead writes a root-owned environment file to `/etc/llmsite/llmsite.env` (mode 600) containing `DJANGO_SETTINGS_MODULE`, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_SECURE_COOKIES`, `ADMIN_USER`, `ADMIN_EMAIL`, and `ADMIN_PASS`. It prompts for the admin password on first run.
 
-If you rely on local-model or Gemini settings, extend the environment strategy accordingly.
+Note that this file contains the admin password in plaintext. Keep its 600 permissions, and consider clearing `ADMIN_PASS` from it once the account exists — it is only read while the account migration runs.
+
+The script sources that file with `set -a` so the values are exported to the `migrate` and `gunicorn` child processes. Sourcing without `set -a` (or without `export`) leaves them shell-local, and Django falls back to its development defaults with no warning.
 
 ## Standard Linux Deployment Flow
 

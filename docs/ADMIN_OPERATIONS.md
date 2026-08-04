@@ -142,15 +142,28 @@ Run these from the Django project context.
 python manage.py import_students <csv_path>
 ```
 
+A worked example lives at `code/llmsite/sample_data/students.sample.csv`.
+
 Expected CSV fields:
 
-- `username`
-- `password`
+- `username` (required)
+- `password` (required)
 - `full_name`
 - `email`
 - `school`
 - `grade`
 - `classes`
+
+Passwords are checked against Django's password validators. If any row fails
+validation the whole import is rolled back and nothing is written, so fix the
+reported rows and re-run.
+
+Re-importing an existing username updates their profile but leaves the password
+alone — a student who has changed their password keeps it. Pass
+`--reset-passwords` to overwrite passwords for existing accounts as well.
+
+The CSV holds plaintext passwords and student personal data. Keep it outside
+the repository, and delete it once the import succeeds.
 
 ### Refresh student progress
 

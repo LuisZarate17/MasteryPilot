@@ -6,9 +6,13 @@ __pycache__/
 *.so
 *.egg-info/
 .env
+.env.*
+!.env.example
 venv/
 .venv/
 db.sqlite3
+*.sqlite3
+*.sqlite3-journal
 bin/
 lib/
 lib64/
@@ -31,4 +35,7 @@ curriculum/
 *$py.class
 # === IDEs and editors ===
 .vscode/
-.idea/  
+.idea/
+
+# === Local planning notes (not part of the project) ===
+CLEANUP_PLAN.md

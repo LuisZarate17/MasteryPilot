@@ -34,11 +34,43 @@ This AI tutoring system enables school districts to offer personalized learning 
 git clone https://github.com/Zelefant/MasteryPilot.git
 cd MasteryPilot
 ```
-2. Run setup.sh:
+2. Create your configuration file:
+```
+cp .env.example .env
+```
+Open `.env` and set at least `DJANGO_SECRET_KEY` and `ADMIN_PASS`. See
+[Configuration](#configuration) below.
+
+3. Run setup.sh:
 ```
 source ./setup.sh
 ```
-3. When finished, go to the IP address and port listed in the console
+4. When finished, go to the IP address and port listed in the console
+
+## Configuration
+
+All secrets and environment-specific settings come from environment variables.
+`.env.example` documents every one of them; copy it to `.env` (gitignored) and
+fill it in.
+
+The three that matter most:
+
+| Variable | Why |
+| --- | --- |
+| `DJANGO_SECRET_KEY` | Required. The app refuses to start without it unless `DJANGO_DEBUG=1`. Generate one with `python -c "import secrets; print(secrets.token_hex(32))"`. |
+| `ADMIN_PASS` | The password for the first administrator account. **There is no default.** If it is unset when you first run `manage.py migrate`, no admin account is created and migrate prints a notice explaining how to add one. |
+| `DJANGO_ALLOWED_HOSTS` | Comma-separated hostnames the site answers to. Defaults to `localhost,127.0.0.1`, so add your server's LAN IP or DNS name before other machines can reach it. |
+
+For local development, set `DJANGO_DEBUG=1` — with debug off, `runserver` does
+not serve static files and the site will render without CSS.
+
+If you already ran `migrate` without `ADMIN_PASS`, set it and replay the
+account migration (its reverse is a no-op):
+
+```
+python manage.py migrate tutor 0001
+python manage.py migrate tutor
+```
 
 ## Functionality
 

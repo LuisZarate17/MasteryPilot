@@ -13,6 +13,30 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Repo root (…/MasteryPilot) — two levels above code/llmsite/.
+REPO_ROOT = BASE_DIR.parent.parent
+
+# Load the repo-root .env before anything below reads os.getenv(). The
+# languagemodel_* modules also call load_dotenv(), but they run long after
+# settings are frozen, so Django's own configuration has to load it here.
+# See .env.example for the full list of supported variables.
+load_dotenv(REPO_ROOT / ".env")
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Read a boolean env var. Accepts 1/true/yes/on, case-insensitively."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 LOGIN_URL = "/login/"
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/"
@@ -24,9 +48,6 @@ DEFAULT_FROM_EMAIL = 'noreply@aitutor.local'
 # Enable Gemini (TESTING ONLY)
 GEMINI_ENABLED = False
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
-
 CURRICULUM_ROOT = BASE_DIR / "curriculum"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
 
@@ -37,13 +58,30 @@ LLM_MODULE = "qwen"
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-change-me")
-
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Defaults to off, so a deployment that forgets to configure anything is safe
+# rather than leaking tracebacks. Set DJANGO_DEBUG=1 for local development —
+# note that runserver will not serve static files with DEBUG off.
+DEBUG = _env_flag("DJANGO_DEBUG", False)
 
-ALLOWED_HOSTS = ["*"]
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set when DEBUG is off. Generate one with:\n"
+            '    python -c "import secrets; print(secrets.token_hex(32))"'
+        )
+    # Development only. Never reachable with DEBUG off (see above).
+    SECRET_KEY = "dev-only-change-me"
+
+# Comma-separated list of hostnames this site answers to, e.g.
+# DJANGO_ALLOWED_HOSTS=tutor.example.edu,192.168.1.50
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
+    if host.strip()
+]
 
 
 # Application definition
@@ -150,8 +188,33 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # Site configuration
 SITE_ID = 1
 
-# CSRF cookie hardening
+# Cookie and transport hardening.
+#
+# The Secure flag tells the browser to send a cookie over HTTPS only, so
+# turning it on without TLS silently breaks login (the CSRF token never
+# reaches the server). Both cookies are therefore gated on one switch, which
+# defaults to on in production and off in development. Set
+# DJANGO_SECURE_COOKIES=0 if you deploy on plain HTTP over a trusted LAN —
+# and understand that session cookies then travel in cleartext.
+SECURE_COOKIES = _env_flag("DJANGO_SECURE_COOKIES", not DEBUG)
+
+CSRF_COOKIE_SECURE = SECURE_COOKIES
+SESSION_COOKIE_SECURE = SECURE_COOKIES
+SECURE_SSL_REDIRECT = SECURE_COOKIES
+
 # Note: CSRF_COOKIE_HTTPONLY must remain False because the frontend
 # reads the CSRF token from the cookie via JavaScript (getCookie("csrftoken")).
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_SAMESITE = "Lax"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+X_FRAME_OPTIONS = "DENY"
+
+# Origins allowed to submit cross-origin POSTs, e.g.
+# DJANGO_CSRF_TRUSTED_ORIGINS=https://tutor.example.edu
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 
