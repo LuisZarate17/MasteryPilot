@@ -13,9 +13,13 @@ venv/
 db.sqlite3
 *.sqlite3
 *.sqlite3-journal
-bin/
-lib/
-lib64/
+# venv install dirs — root only, so a real static/lib/ is never swallowed
+/bin/
+/lib/
+/lib64/
+/share/
+/Scripts/
+/Include/
 pyvenv.cfg
 
 # === .NET build output (model_selector_app) ===
@@ -36,6 +40,9 @@ curriculum/
 # === IDEs and editors ===
 .vscode/
 .idea/
+.vs/
+*.suo
+*.user
 
 # === Local planning notes (not part of the project) ===
 CLEANUP_PLAN.md
