@@ -2,7 +2,7 @@
 
 ## Overview
 
-The main deployable application in this repository is the Django project in `code/llmsite`. The included `setup.sh` script is the closest thing to an operational reference deployment. It creates a virtual environment, installs requirements, creates an environment file, runs migrations, and starts Gunicorn.
+The main deployable application in this repository is the Django project in `code/llmsite`. The included `setup.sh` script is the closest thing to an operational reference deployment. It creates a virtual environment, installs the core requirements, writes a repository-root `.env` if one does not exist, and runs migrations. Passing `--serve` also starts Gunicorn in the foreground. It requires no root and writes nothing outside the repository.
 
 ## Deployment Scope
 
@@ -25,13 +25,15 @@ This guide covers the Django web application only. It does not deploy the Window
 - Django settings: `code/llmsite/llmsite/settings.py`
 - Main app: `code/llmsite/tutor`
 - Deployment script: `setup.sh`
-- Python dependency list: `requirements.txt`
+- Core Python dependency list: `requirements.txt`
+- Local inference / RAG dependency list: `requirements-llm.txt`
+- Environment file: `.env` in the repository root
 
 ## Prerequisites
 
 ### Operating system
 
-The included setup script is Bash-based and assumes Linux. If you deploy on Windows, you will need an equivalent process for virtual environment setup, dependency install, migration, and process management.
+The included setup script is Bash-based and assumes Linux. If you deploy on Windows, follow the Quick start in the root `README.md` — the same virtualenv, install, migrate, and `runserver` sequence, run by hand. Gunicorn does not run on Windows; use a Windows-capable WSGI server such as Waitress for anything beyond development.
 
 ### Required software
 
@@ -43,22 +45,27 @@ The included setup script is Bash-based and assumes Linux. If you deploy on Wind
 
 ### Python dependencies
 
-The project currently depends on:
+Dependencies are split across two files, because the two halves differ by three orders of magnitude in size.
+
+`requirements.txt` — everything needed to install, migrate, run the test suite, and serve pages. A few megabytes.
 
 - Django
 - Gunicorn
-- PyPDF2
 - python-dotenv
-- httpx
+
+`requirements-llm.txt` — the local inference and RAG stack, roughly 3–5 GB. Every package here is imported lazily, the first time a chat starts, so the site installs and runs without it; only tutor responses fail.
+
 - numpy
+- PyPDF2
+- faiss-cpu
+- sentence-transformers
 - torch
 - transformers
-- sentence-transformers
-- faiss-cpu
-- google-generativeai
 - accelerate
+- bitsandbytes
+- google-generativeai
 
-The local-model stack is substantially heavier than the quick-start instructions in the root `README.md` imply.
+Both files are exact-pinned. `requirements-llm.txt` documents a CUDA 11.8 install path for NVIDIA hosts; the default resolves CPU-only wheels. Deployments that will not use a local model can skip the second file entirely.
 
 ## Configuration
 
@@ -94,13 +101,15 @@ Depending on model strategy, operators may also need:
 
 ### Environment file handling
 
-Django loads a `.env` file from the repository root at startup (`load_dotenv` in `settings.py`).
+Django loads a `.env` file from the repository root at startup (`load_dotenv` in `settings.py`). That is the only configuration file it reads.
 
-`setup.sh` instead writes a root-owned environment file to `/etc/llmsite/llmsite.env` (mode 600) containing `DJANGO_SETTINGS_MODULE`, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_SECURE_COOKIES`, `ADMIN_USER`, `ADMIN_EMAIL`, and `ADMIN_PASS`. It prompts for the admin password on first run.
+`setup.sh` writes that same file (mode 600) on first run, containing `DJANGO_SECRET_KEY`, `DJANGO_DEBUG`, `DJANGO_ALLOWED_HOSTS`, `DJANGO_SECURE_COOKIES`, `ADMIN_USER`, `ADMIN_EMAIL`, and `ADMIN_PASS`. It generates the secret key and prompts for the admin password. If `.env` already exists the script leaves it untouched, so re-running setup never clobbers a configured deployment.
+
+Because Django reads the file itself, no environment exporting is required: any later `manage.py` command picks up the same configuration, whether or not it was launched by the script.
 
 Note that this file contains the admin password in plaintext. Keep its 600 permissions, and consider clearing `ADMIN_PASS` from it once the account exists — it is only read while the account migration runs.
 
-The script sources that file with `set -a` so the values are exported to the `migrate` and `gunicorn` child processes. Sourcing without `set -a` (or without `export`) leaves them shell-local, and Django falls back to its development defaults with no warning.
+For a hardened deployment, keep secrets out of the working tree entirely: place them somewhere like `/etc/llmsite/llmsite.env`, owned by the service account and mode 600, and export them into the process environment through your supervisor (a systemd unit's `EnvironmentFile=`, for example). Django reads real environment variables in preference to anything in `.env`, so this requires no code change — but it does mean the repository `.env` must not also carry stale values.
 
 ## Standard Linux Deployment Flow
 
@@ -108,10 +117,13 @@ The script sources that file with `set -a` so the values are exported to the `mi
 2. Confirm the Django project exists at `code/llmsite/manage.py`.
 3. Create a virtual environment.
 4. Install `requirements.txt`.
-5. Create a secure environment file.
+5. Create a secure `.env` in the repository root.
 6. Run Django migrations.
-7. Start Gunicorn from `code/llmsite`.
-8. Confirm the service is reachable on the intended host and port.
+7. Install `requirements-llm.txt` if the deployment will serve tutor responses.
+8. Start Gunicorn from `code/llmsite`.
+9. Confirm the service is reachable on the intended host and port.
+
+`./setup.sh --serve` performs steps 3 through 6 and 8.
 
 ## Reference Process from setup.sh
 
@@ -119,10 +131,13 @@ The repository script performs these actions:
 
 1. Uses repository-root `.venv`.
 2. Installs dependencies from `requirements.txt`.
-3. Generates a secret key if missing.
-4. Loads environment variables from `/etc/llmsite/llmsite.env`.
-5. Runs `python manage.py migrate --noinput`.
-6. Starts Gunicorn bound to `0.0.0.0:8000`.
+3. Writes repository-root `.env` if absent, generating a secret key and prompting for the admin password.
+4. Runs `python manage.py migrate --noinput`.
+5. With `--serve`, starts Gunicorn bound to `0.0.0.0:8000`. Without it, prints how to start the server and exits.
+
+It does not install `requirements-llm.txt`; it prints the command instead.
+
+`PYTHON_BIN` overrides the interpreter if `python3` is not on `PATH`.
 
 ## Recommended Production Hardening Before External Use
 
@@ -135,7 +150,7 @@ The repository script performs these actions:
 
 ### Security
 
-- Replace `ALLOWED_HOSTS = ["*"]` with explicit hostnames.
+- Set `DJANGO_ALLOWED_HOSTS` to the explicit hostnames the site answers to; the default covers localhost only.
 - Review `CSRF_COOKIE_SECURE`, session cookie policy, and HTTPS enforcement together.
 - Ensure secrets are stored outside the repository and rotated if exposed.
 - Replace console email backend for real password reset delivery.

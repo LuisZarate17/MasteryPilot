@@ -19,33 +19,99 @@ This AI tutoring system enables school districts to offer personalized learning 
 
 ### Prerequisites
 
-- Python 3.13 or newer
+- Python 3.10–3.13 (3.13 recommended; Django 5.2 does not support 3.14 yet)
 
-### Add-ons
+The base install is small and takes seconds. The AI tutor needs a separate
+multi-gigabyte model stack — see [Enabling the AI tutor](#enabling-the-ai-tutor).
 
-- Qwen3 - One of three LLM modules you can use (Default module)
-- LLaMA - One of three LLM modules you can use (Requires license from Meta)
-- Mistral - One of three LLM modules you can use
+### Quick start (development, any OS)
 
-### Installation Steps
-
-1. Clone the repository:
 ```
-git clone https://github.com/Zelefant/MasteryPilot.git
+git clone https://github.com/LuisZarate17/MasteryPilot.git
 cd MasteryPilot
 ```
-2. Create your configuration file:
+
+Create a virtual environment and install the core dependencies:
+
+```
+python -m venv .venv
+
+# Linux / macOS
+source .venv/bin/activate
+
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+pip install -r requirements.txt
+```
+
+Create your configuration file:
+
 ```
 cp .env.example .env
 ```
-Open `.env` and set at least `DJANGO_SECRET_KEY` and `ADMIN_PASS`. See
-[Configuration](#configuration) below.
 
-3. Run setup.sh:
+Open `.env` and set three things:
+
+- `DJANGO_SECRET_KEY` — generate one with
+  `python -c "import secrets; print(secrets.token_hex(32))"`
+- `DJANGO_DEBUG=1` — required for local development, otherwise `runserver`
+  does not serve static files and the site renders without CSS
+- `ADMIN_PASS` — the password for the first administrator account
+
+Then create the database and start the server:
+
 ```
-source ./setup.sh
+cd code/llmsite
+python manage.py migrate
+python manage.py runserver
 ```
-4. When finished, go to the IP address and port listed in the console
+
+Open <http://127.0.0.1:8000/> and sign in as `admin` with the password you set.
+
+### Server deploy (Linux)
+
+`setup.sh` does the same work non-interactively — virtualenv, dependencies,
+generated `.env`, migrations — and can start Gunicorn. It needs no root and
+writes only inside the repository.
+
+```
+chmod +x setup.sh
+./setup.sh --serve
+```
+
+Without `--serve` it stops after migrations and prints how to start the server.
+It prompts for the initial admin password and generates a secret key for you.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) before exposing it to a network.
+
+### Enabling the AI tutor
+
+The steps above give you a running site — accounts, dashboards, curriculum
+upload, progress tracking. Chat responses need the local inference and RAG
+stack, which is a separate install of roughly 3–5 GB:
+
+```
+pip install -r requirements-llm.txt
+```
+
+For an NVIDIA GPU with CUDA 11.8, install torch from PyTorch's index first:
+
+```
+pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+pip install -r requirements-llm.txt
+```
+
+The model itself is downloaded from Hugging Face on the first chat message, so
+the first response after a fresh install takes a while.
+
+### Model add-ons
+
+- Qwen3 — default module
+- LLaMA — requires a license from Meta
+- Mistral
+
+Selected via `LLM_MODULE` in `code/llmsite/llmsite/settings.py`. See
+[Known Problems](#known-problems).
 
 ## Configuration
 

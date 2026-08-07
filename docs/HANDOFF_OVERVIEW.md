@@ -77,11 +77,13 @@ Role behavior is implemented in custom profile models:
 
 The current repository most directly supports a single-server deployment of the Django web application. The included `setup.sh` script assumes:
 
-- Linux host
-- Python virtual environment
-- Gunicorn process
+- Linux or macOS host with Bash (Windows is supported by the manual steps in the root `README.md`)
+- Python virtual environment, created inside the repository
+- Gunicorn process, started only when the script is given `--serve`
 - SQLite database
-- Local or externally available model/runtime dependencies
+- Local or externally available model/runtime dependencies, installed separately from `requirements-llm.txt`
+
+The script runs unprivileged and writes nothing outside the repository.
 
 This is suitable for a prototype or limited pilot, not a hardened production rollout without further infrastructure work.
 

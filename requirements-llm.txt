@@ -1,0 +1,37 @@
+# MasteryPilot — local inference and RAG stack.
+#
+# Not needed to install the site, log in, browse the dashboard, or run the test
+# suite. Every package here is imported lazily, the first time a chat starts
+# (see ensure_llm_initialized() in code/llmsite/tutor/views.py). Install it when
+# you want the tutor to actually answer.
+#
+# Expect roughly 3-5 GB on disk, most of it torch.
+#
+# CPU-only (the default, works everywhere):
+#
+#     pip install -r requirements-llm.txt
+#
+# NVIDIA GPU with CUDA 11.8 — install torch from PyTorch's index FIRST, then
+# this file. Note --index-url, not --extra-index-url: it applies to torch alone
+# and does not mix package indexes for everything else.
+#
+#     pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu118
+#     pip install -r requirements-llm.txt
+
+# RAG retrieval (code/llmsite/rag.py)
+numpy==2.5.1
+PyPDF2==3.0.1
+faiss-cpu==1.15.0
+sentence-transformers==5.7.0
+
+# Local model adapters (code/llmsite/languagemodel_qwen.py and friends).
+# transformers is held below 5.0 deliberately: the adapters were written and
+# demoed against the 4.x API and have not been revalidated against 5.x.
+torch==2.7.1
+transformers==4.57.6
+accelerate==1.14.0
+bitsandbytes==0.50.0
+
+# Gemini path (code/llmsite/languagemodel_legacy.py), off unless
+# settings.GEMINI_ENABLED is turned on.
+google-generativeai==0.8.6

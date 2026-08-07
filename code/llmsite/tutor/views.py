@@ -16,7 +16,6 @@ import re
 import csv
 
 # DeriveSessionTitle is dispatched per-module in _derive_session_title()
-from httpx import request
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile

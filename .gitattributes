@@ -1,0 +1,12 @@
+# Normalize line endings in the repository regardless of contributor platform.
+# setup.sh in particular must stay LF: a CRLF shebang is a broken interpreter
+# path on Linux.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# Never touch these.
+*.png binary
+*.pdf binary
+*.pptx binary
+*.docx binary
+*.mkv binary
