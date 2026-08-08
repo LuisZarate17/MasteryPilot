@@ -2,7 +2,9 @@
 
 > **Team capstone project** (WSU CPT_S 421/423). Built by [Zelefant](https://github.com/Zelefant),
 > [Jesse Boakye](https://github.com/jesseboakye), and [Luis Zarate](https://github.com/LuisZarate17).
-> This is Luis Zarate's copy of the team repository, preserving the full commit history.
+> This is Luis Zarate's fork of the team repository. Its history has been rewritten to strip
+> large binaries — a screen recording, textbook PDFs, and dev database snapshots — so commit
+> hashes here diverge from upstream.
 > Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
 
 **Stack:** Python 3.13 · Django · SQLite · local LLM inference (Qwen3 / LLaMA / Mistral) · hybrid RAG retrieval
@@ -172,6 +174,7 @@ python manage.py migrate tutor
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md) - Current technical and operational limits.
 
 - [Sprint 6 Report](docs/Reports/SPRINT_6_REPORT.md) – Sprint 6 latest overview of work completed and unfinished work.
+- [Presentations](docs/Presentations/README.md) - Sprint decks and the Sprint 1 demo recording.
 - [GitHub Issues](https://github.com/Zelefant/MasteryPilot/issues) - Current issues, user stories, and progress tracking.
 
 ## License
