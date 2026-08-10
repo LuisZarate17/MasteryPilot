@@ -15,47 +15,34 @@ import os
 import re
 import csv
 
-# DeriveSessionTitle is dispatched per-module in _derive_session_title()
 from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
 from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
 from .models import TeacherProfile, AdminProfile, StudentProfile
-from tutor.globals import GetModelAndTokenizer
 
+# Process-wide cache. The weights are several GB, so they are loaded once on
+# first use and reused for the life of the worker.
 model = None
 tokenizer = None
 gemini = None
 
-def _get_local_llm_fns():
-    if settings.LLM_MODULE == "mistral":
-        from languagemodel_mistral import InitModel, StartChat, SendMessage
-        return InitModel, StartChat, SendMessage
-    
-    elif settings.LLM_MODULE == "qwen":
-        from languagemodel_qwen import InitModel, StartChat, SendMessage
-        return InitModel, StartChat, SendMessage
-    
-    elif settings.LLM_MODULE == "llama":
-        from languagemodel_llama import InitModel, StartChat, SendMessage
-        return InitModel, StartChat, SendMessage
+
+def _adapter():
+    """The LLM adapter for settings.LLM_MODULE.
+
+    Imported lazily: languagemodel pulls in transformers and torch, which are
+    optional (requirements-llm.txt) and absent when running the test suite.
+    """
+    from languagemodel import get_adapter
+
+    return get_adapter(settings.LLM_MODULE)
+
 
 def _derive_session_title(first_message: str) -> str:
-    """Dispatch DeriveSessionTitle to the correct LLM module."""
     try:
-        if settings.GEMINI_ENABLED:
-            from languagemodel_legacy import DeriveSessionTitle
-            return DeriveSessionTitle(first_message)
-        elif settings.LLM_MODULE == "qwen":
-            from languagemodel_qwen import DeriveSessionTitle
-            return DeriveSessionTitle(model, tokenizer, first_message)
-        elif settings.LLM_MODULE == "mistral":
-            from languagemodel_mistral import DeriveSessionTitle
-            return DeriveSessionTitle(model, tokenizer, first_message)
-        elif settings.LLM_MODULE == "llama":
-            from languagemodel_llama import DeriveSessionTitle
-            return DeriveSessionTitle(model, tokenizer, first_message)
+        return _adapter().derive_session_title(model, tokenizer, first_message)
     except Exception as e:
         print(f"[_derive_session_title] error: {e}")
-    return ""
+        return ""
 
 def ensure_llm_initialized():
     """
@@ -75,23 +62,10 @@ def ensure_llm_initialized():
     else:
         if model is None or tokenizer is None:
             try:
-                # Prefer the already-loaded globals (if apps.py set them)
-                model, tokenizer = GetModelAndTokenizer()
-            except Exception:
-                # Fall back to InitModel if GetModelAndTokenizer isn't ready
-                try:
-                    InitModel, _, _ = _get_local_llm_fns()
-                    model, tokenizer = InitModel()
-                    # If you want the globals module to know about them:
-                    try:
-                        import tutor.globals as tglobals
-                        tglobals.loaded_model = model
-                        tglobals.loaded_tokenizer = tokenizer
-                    except Exception:
-                        pass
-                except Exception as e:
-                    print(f"[ensure_llm_initialized] Failed to init local model: {e}")
-                    model = tokenizer = None
+                model, tokenizer = _adapter().init_model()
+            except Exception as e:
+                print(f"[ensure_llm_initialized] Failed to init local model: {e}")
+                model = tokenizer = None
 
 
 def _session_id(request):
@@ -551,11 +525,11 @@ def api_new_session(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
-                StartChat = _get_local_llm_fns()[1]
-                chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
-                assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
+                assistant_msg, messages = _adapter().start_chat(
+                    model, tokenizer, name, school, grade, classes
+                )
             except Exception as e:
-                print(f"[api_new_session] StartChat error: {e}")
+                print(f"[api_new_session] start_chat error: {e}")
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
@@ -612,11 +586,11 @@ def api_init(request):
             assistant_msg = "Model unavailable. Please try again later."
         else:
             try:
-                StartChat = _get_local_llm_fns()[1]
-                chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
-                assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), assistant_msg)
+                assistant_msg, messages = _adapter().start_chat(
+                    model, tokenizer, name, school, grade, classes
+                )
             except Exception as e:
-                print(f"[api_init] StartChat error: {e}")
+                print(f"[api_init] start_chat error: {e}")
                 messages = []
                 assistant_msg = "Model error. Please try again later."
 
@@ -670,13 +644,11 @@ def api_chat(request):
             error_occurred = True
         else:
             try:
-                SendMessage = _get_local_llm_fns()[2]
-                reply, messages = SendMessage(model, tokenizer, chat, msg)
-                assistant_reply_text = reply if isinstance(reply, str) else None
-                if not assistant_reply_text and messages:
-                    assistant_reply_text = next((m.get("content") for m in messages if m.get("role") == "assistant"), "")
+                assistant_reply_text, messages = _adapter().send_message(
+                    model, tokenizer, chat, msg
+                )
             except Exception as e:
-                print(f"[api_chat] Local SendMessage error: {e}")
+                print(f"[api_chat] Local send_message error: {e}")
                 assistant_reply_text = "Model error, please try again later."
                 error_occurred = True
     else:
@@ -1214,8 +1186,9 @@ def api_session_init(request, session_id):
         return JsonResponse({"ok": False, "error": "Model unavailable"}, status=503)
 
     try:
-        StartChat = _get_local_llm_fns()[1]
-        chat, messages = StartChat(model, tokenizer, name, school, grade, classes)
+        assistant_msg, messages = _adapter().start_chat(
+            model, tokenizer, name, school, grade, classes
+        )
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
 
@@ -1227,7 +1200,6 @@ def api_session_init(request, session_id):
 
     request.session['session_id'] = str(session.id)
 
-    assistant_msg = next((m.get("content") for m in messages if m.get("role") == "assistant"), None)
     return JsonResponse({"ok": True, "model_text": assistant_msg or "Hello!"})
 
 
