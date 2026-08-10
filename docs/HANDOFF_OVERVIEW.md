@@ -23,11 +23,7 @@ Relevant code entry points:
 - `code/llmsite/tutor/views.py`
 - `code/llmsite/tutor/models.py`
 
-### 2. Windows model selector utility
-
-The repository also includes a separate Windows Forms application under `model_selector_app/ModelSelector/ModelSelector`. This utility scrapes Hugging Face model listings and writes a `LANGUAGE_MODEL_ID` value into a selected `.env` file. It is not part of the web user interface, but it is relevant for local-model configuration workflows.
-
-### 3. Historical project material
+### 2. Historical project material
 
 The `docs/Reports`, `docs/Presentations`, and `docs/MoM` folders contain sprint reports, presentation artifacts, and meeting minutes. These are useful for project history, but they should not be treated as the operational handoff set.
 
@@ -92,10 +88,9 @@ This is suitable for a prototype or limited pilot, not a hardened production rol
 The handoff package should clearly distinguish:
 
 - Main deployable system: `code/llmsite`
-- Auxiliary desktop utility: `model_selector_app`
 - Historical artifacts: sprint reports and presentations
 
-This matters because the root `README.md` currently mixes setup guidance and does not clearly separate the live application from auxiliary tooling or historical documents.
+A Windows Forms model-selector utility used to live under `model_selector_app/`. It was removed: it wrote the chosen model id by overwriting the whole target `.env` with a single line, which destroys `DJANGO_SECRET_KEY` and every other setting the application needs. Model selection is now `LLM_MODULE` and `LANGUAGE_MODEL_ID` in `.env`.
 
 ## Recommended Handoff Deliverables
 

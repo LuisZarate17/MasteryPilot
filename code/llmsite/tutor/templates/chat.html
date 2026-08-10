@@ -687,14 +687,17 @@
         return;
       }
 
-      const initRes = await fetch("{% url 'api_init' %}", {
+      // api_session_init, not api_init: it persists the system prompt and the
+      // greeting against this session, so the next api_chat call rebuilds the
+      // full history from the DB instead of starting the model from nothing.
+      const initRes = await fetch(`/api/session/${sessionId}/init/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-CSRFToken": csrftoken
         },
         credentials: "same-origin",
-        body: JSON.stringify({ session_id: sessionId })
+        body: JSON.stringify({})
       });
       if (!initRes.ok) {
         const errText = await initRes.text();

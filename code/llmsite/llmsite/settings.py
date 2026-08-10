@@ -45,14 +45,23 @@ LOGOUT_REDIRECT_URL = "/"
 EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'noreply@aitutor.local'
 
-# Enable Gemini (TESTING ONLY)
-GEMINI_ENABLED = False
-
 CURRICULUM_ROOT = BASE_DIR / "curriculum"
 DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
 
-# LLM to use
-LLM_MODULE = "qwen"
+# Which local model family to talk to. Set LLM_MODULE in .env to switch;
+# LANGUAGE_MODEL_ID overrides the specific checkpoint within a family.
+#
+# The names are duplicated from languagemodel.SPECS on purpose: importing that
+# module here would pull transformers and torch into every `manage.py` run,
+# including the test suite, which does not install them.
+SUPPORTED_LLM_MODULES = frozenset({"qwen", "mistral", "llama"})
+
+LLM_MODULE = (os.getenv("LLM_MODULE") or "qwen").strip().lower()
+if LLM_MODULE not in SUPPORTED_LLM_MODULES:
+    raise ImproperlyConfigured(
+        f"LLM_MODULE={LLM_MODULE!r} is not supported. "
+        f"Choose one of: {', '.join(sorted(SUPPORTED_LLM_MODULES))}."
+    )
 
 
 # Quick-start development settings - unsuitable for production

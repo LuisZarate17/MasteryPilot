@@ -17,7 +17,6 @@ This guide covers the Django web application only. It does not deploy the Window
 - File storage: local filesystem for curriculum documents
 - Model backends:
   - Local model mode via `LLM_MODULE`
-  - Optional Gemini-based mode in legacy code paths
 
 ## Important Repository Paths
 
@@ -78,8 +77,7 @@ Current settings in `code/llmsite/llmsite/settings.py` include:
 - SQLite database at `BASE_DIR / "db.sqlite3"`
 - `STATIC_ROOT = BASE_DIR / "staticfiles"`
 - `CURRICULUM_ROOT = BASE_DIR / "curriculum"`
-- `GEMINI_ENABLED = False`
-- `LLM_MODULE = "qwen"`
+- `LLM_MODULE` — from `LLM_MODULE`, defaults to `qwen`; `mistral` and `llama` are the alternatives
 
 ### Required environment values
 
@@ -96,8 +94,8 @@ Recommended:
 
 Depending on model strategy, operators may also need:
 
-- `LANGUAGE_MODEL_ID`
-- `GEMINI_API_KEY`
+- `LLM_MODULE` — which model family to load: `qwen` (default), `mistral`, or `llama`. An unrecognised value stops startup with `ImproperlyConfigured`.
+- `LANGUAGE_MODEL_ID` — overrides the checkpoint within that family, as a Hugging Face repo id.
 
 ### Environment file handling
 
@@ -163,7 +161,7 @@ It does not install `requirements-llm.txt`; it prints the command instead.
 
 ### Model/runtime planning
 
-- Validate whether deployment will use a local model or Gemini.
+- Validate that the target host can run the selected model, and set `LLM_MODULE` accordingly.
 - Document hardware expectations for local model execution.
 - Confirm all required model assets are available in the deployment environment.
 
@@ -189,7 +187,7 @@ It does not install `requirements-llm.txt`; it prints the command instead.
 
 ### Chat or model responses fail
 
-- Confirm whether the system is configured for local models or Gemini.
+- Confirm `LLM_MODULE` names a supported family and that `requirements-llm.txt` is installed.
 - Check that the selected `LLM_MODULE` is supported.
 - Confirm model dependencies are installed and reachable.
 

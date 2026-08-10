@@ -8,8 +8,7 @@ This folder contains the handoff documentation for the AI Tutor project.
 2. [Deployment Guide](DEPLOYMENT.md)
 3. [Admin Operations Guide](ADMIN_OPERATIONS.md)
 4. [User Manual](USER_MANUAL.md)
-5. [Model Selector Utility](MODEL_SELECTOR.md)
-6. [Known Limitations](KNOWN_LIMITATIONS.md)
+5. [Known Limitations](KNOWN_LIMITATIONS.md)
 
 ## Audience Guide
 

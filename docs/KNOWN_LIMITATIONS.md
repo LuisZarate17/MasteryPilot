@@ -21,9 +21,9 @@ This project is functional as a prototype, but several current implementation ch
 ## Model and AI Runtime Limits
 
 - The project includes heavy local-model dependencies and likely requires environment-specific runtime validation.
-- Gemini-related code paths exist, but the current Django settings disable Gemini by default.
-- The repository mixes local-model and Gemini assumptions across documentation and code.
-- Model selection and model-hosting expectations are not yet standardized for operators.
+- Only the Qwen path has been exercised end to end. Mistral and LLaMA share the same code path but have not been run against real weights.
+- LLaMA is driven through a hand-written chat template rather than the one its tokenizer provides.
+- Inference is local-only. There is no hosted-API fallback, so a machine without a suitable GPU cannot answer chats.
 
 ## Product and UX Limits
 

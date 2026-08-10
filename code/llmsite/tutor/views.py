@@ -23,7 +23,6 @@ from .models import TeacherProfile, AdminProfile, StudentProfile
 # first use and reused for the life of the worker.
 model = None
 tokenizer = None
-gemini = None
 
 
 def _adapter():
@@ -45,33 +44,18 @@ def _derive_session_title(first_message: str) -> str:
         return ""
 
 def ensure_llm_initialized():
-    """
-    Ensure that either local model/tokenizer or Gemini client is initialized.
-    Safe to call multiple times.
-    """
-    global model, tokenizer, gemini
-    if settings.GEMINI_ENABLED:
-        if gemini is None:
-            try:
-                # StartAIChat should be available via languagemodel_legacy import
-                #gemini = StartAIChat()
-                pass
-            except Exception as e:
-                print(f"[ensure_llm_initialized] Failed to start Gemini: {e}")
-                gemini = None
-    else:
-        if model is None or tokenizer is None:
-            try:
-                model, tokenizer = _adapter().init_model()
-            except Exception as e:
-                print(f"[ensure_llm_initialized] Failed to init local model: {e}")
-                model = tokenizer = None
+    """Load the model and tokenizer if they are not loaded yet.
 
-
-def _session_id(request):
-    if not request.session.session_key:
-        request.session.save()
-    return request.session.session_key
+    Safe to call multiple times. Leaves both None on failure so callers can
+    return "Model unavailable" rather than raising.
+    """
+    global model, tokenizer
+    if model is None or tokenizer is None:
+        try:
+            model, tokenizer = _adapter().init_model()
+        except Exception as e:
+            print(f"[ensure_llm_initialized] Failed to init local model: {e}")
+            model = tokenizer = None
 
 
 def _load_messages_from_db(request):
@@ -495,43 +479,20 @@ def api_new_session(request):
         grade = "Freshman"
         classes = "Algebra 2, History, English"
 
-    # Ensure LLM/Gemini is initialized
     ensure_llm_initialized()
 
-    global gemini
     messages = []
-    assistant_msg = "Hello!"  # fallback
-
-    if settings.GEMINI_ENABLED:
-        """
-        # Gemini path: call but DON'T persist error messages into DB/history
-        try:
-            if gemini is None:
-                gemini = StartAIChat()
-            initial_msg = Initialization(gemini, name, school, grade, classes) if gemini else None
-            if initial_msg:
-                messages = [{"role": "assistant", "content": initial_msg}]
-                assistant_msg = initial_msg
-        except Exception as e:
-            print(f"[api_new_session] Gemini initialization error: {e}")
-            messages = []
-            assistant_msg = "Model unavailable. Please try again later."
-        """
-        pass
+    if model is None or tokenizer is None:
+        assistant_msg = "Model unavailable. Please try again later."
     else:
-        # Local LLM path
-        if model is None or tokenizer is None:
+        try:
+            assistant_msg, messages = _adapter().start_chat(
+                model, tokenizer, name, school, grade, classes
+            )
+        except Exception as e:
+            print(f"[api_new_session] start_chat error: {e}")
             messages = []
-            assistant_msg = "Model unavailable. Please try again later."
-        else:
-            try:
-                assistant_msg, messages = _adapter().start_chat(
-                    model, tokenizer, name, school, grade, classes
-                )
-            except Exception as e:
-                print(f"[api_new_session] start_chat error: {e}")
-                messages = []
-                assistant_msg = "Model error. Please try again later."
+            assistant_msg = "Model error. Please try again later."
 
     # persist messages to DB
     for m in messages:
@@ -555,66 +516,6 @@ def api_new_session(request):
     })
 
 
-@require_http_methods(["POST"])
-@login_required
-def api_init(request):
-    import time
-    print("api_init called at", time.time())
-    # Student info
-    name = request.user.get_full_name() or request.user.username
-    try:
-        profile = request.user.studentprofile
-        school = profile.school
-        grade = profile.grade
-        classes = profile.classes
-    except Exception:
-        school = "George Washington High School"
-        grade = "Freshman"
-        classes = "Algebra 2, History, English"
-
-    # Ensure LLM/Gemini is initialized
-    ensure_llm_initialized()
-    sid = _session_id(request)
-
-    global gemini
-    messages = []
-    assistant_msg = "Hello!"
-
-    if not settings.GEMINI_ENABLED:
-        if model is None or tokenizer is None:
-            messages = []
-            assistant_msg = "Model unavailable. Please try again later."
-        else:
-            try:
-                assistant_msg, messages = _adapter().start_chat(
-                    model, tokenizer, name, school, grade, classes
-                )
-            except Exception as e:
-                print(f"[api_init] start_chat error: {e}")
-                messages = []
-                assistant_msg = "Model error. Please try again later."
-
-        return JsonResponse({"ok": True, "model_text": assistant_msg})
-    else:
-        """
-        try:
-            if gemini is None:
-                gemini = StartAIChat()
-            response = Initialization(gemini, name, school, grade, classes) if gemini else None
-            if response:
-                CHAT_REGISTRY[sid] = [{"role": "assistant", "content": response}]
-                assistant_msg = response
-            else:
-                CHAT_REGISTRY[sid] = []
-                assistant_msg = "Model unavailable. Please try again later."
-        except Exception as e:
-            print(f"[api_init] Gemini initialization error: {e}")
-            CHAT_REGISTRY[sid] = []
-            assistant_msg = "Model error. Please try again later."
-
-        return JsonResponse({"ok": True, "model_text": assistant_msg})
-        """
-        pass
 
 @require_http_methods(["POST"])
 def api_chat(request):
@@ -636,77 +537,19 @@ def api_chat(request):
     assistant_reply_text = None
     error_occurred = False
 
-    global gemini
-    if not settings.GEMINI_ENABLED:
-        # local model path
-        if model is None or tokenizer is None:
-            assistant_reply_text = "Model unavailable. Please try again later."
-            error_occurred = True
-        else:
-            try:
-                assistant_reply_text, messages = _adapter().send_message(
-                    model, tokenizer, chat, msg
-                )
-            except Exception as e:
-                print(f"[api_chat] Local send_message error: {e}")
-                assistant_reply_text = "Model error, please try again later."
-                error_occurred = True
+    if model is None or tokenizer is None:
+        assistant_reply_text = "Model unavailable. Please try again later."
+        error_occurred = True
     else:
-        # Gemini path
-        """
         try:
-            if gemini is None:
-                try:
-                    gemini = StartAIChat()
-                except Exception:
-                    gemini = None
-            if gemini:
-                assistant_reply_text = SendMessage(gemini, msg)
-
-                # Debug log
-                print("=== Gemini reply in api_chat ===")
-                print(assistant_reply_text)
-                print("=== End Gemini reply ===")
-
-                # NEW: if this looks like a quiz JSON, create/replace active Quiz for this session
-                try:
-                    quiz_json = _try_extract_quiz_json(assistant_reply_text)
-                    print("Parsed quiz_json:", repr(quiz_json))
-                    if quiz_json:
-                        session_id = request.session.get("session_id")
-                        print("session_id for quiz:", session_id)
-                        if session_id:
-                            try:
-                                session = Session.objects.get(id=session_id, owner=request.user)
-                                Quiz.objects.filter(session=session, status="active").update(status="submitted")
-                                Quiz.objects.create(
-                                    session=session,
-                                    status="active",
-                                    quiz_json=quiz_json,
-                                )
-                                print("Created Quiz for session", session_id)
-                            except Exception as qe:
-                                print(f"[api_chat] Failed to create Quiz object: {qe}")
-                except Exception as qe_outer:
-                    print(f"[api_chat] Quiz JSON parse error: {qe_outer}")
-            else:
-                assistant_reply_text = "Model unavailable. Please try again later."
-                error_occurred = True
+            assistant_reply_text, messages = _adapter().send_message(
+                model, tokenizer, chat, msg
+            )
         except Exception as e:
-            print(f"[api_chat] Gemini SendMessage error: {e}")
+            print(f"[api_chat] send_message error: {e}")
             assistant_reply_text = "Model error, please try again later."
             error_occurred = True
 
-        existing = CHAT_REGISTRY.get(sid)
-        if not isinstance(existing, list):
-            existing = []
-        existing.append({"role": "user", "content": msg})
-        if not error_occurred:
-            existing.append({"role": "assistant", "content": assistant_reply_text})
-        CHAT_REGISTRY[sid] = existing
-        """
-        pass
-    
     # Persist to DB: only persist user + assistant when there was no model error.
     new_session_title = None
     try:
@@ -1086,16 +929,17 @@ def api_session_messages(request, session_id):
     # shown to the student when viewing chat history (issue #35).
     # Two things to hide:
     #   1. role="system" rows (the tutor instructions block)
-    #   2. The auto-generated "Here is your student information..." (local
-    #      LLMs) / "Name: ...\nSchool: ...\nGrade: ..." (Gemini) user message
-    #      that the backend sends on StartChat — the student never typed it.
+    #   2. The auto-generated "Here is your student information..." user
+    #      message the backend sends on start_chat — the student never typed it.
     def _is_bootstrap_user_message(text: str) -> bool:
         if not text:
             return False
         stripped = text.lstrip()
         if stripped.startswith("Here is your student information"):
             return True
-        # Gemini bootstrap shape: starts with "Name:" plus School + Grade lines
+        # Bare "Name:/School:/Grade:" shape, written by adapters predating the
+        # consolidation in languagemodel.py. Kept so upgraded deployments do not
+        # start showing the bootstrap turn in old sessions.
         if stripped.startswith("Name:") and "School:" in stripped and "Grade:" in stripped:
             return True
         return False

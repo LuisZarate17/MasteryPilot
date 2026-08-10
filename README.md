@@ -112,8 +112,11 @@ the first response after a fresh install takes a while.
 - LLaMA — requires a license from Meta
 - Mistral
 
-Selected via `LLM_MODULE` in `code/llmsite/llmsite/settings.py`. See
-[Known Problems](#known-problems).
+Pick one with `LLM_MODULE` in `.env` (`qwen`, `mistral`, or `llama`; defaults
+to `qwen`). `LANGUAGE_MODEL_ID` overrides the specific checkpoint within a
+family — set it to `Qwen/Qwen3-1.7B` for a smaller download than the default
+`Qwen/Qwen3-4B`. An unrecognised `LLM_MODULE` stops startup with an error
+naming the valid options.
 
 ## Configuration
 
@@ -152,7 +155,13 @@ python manage.py migrate tutor
 
 ## Known Problems
 
-- Model Swapper is not functional with the current version of the product. To swap the LLM, you must access code/llmsite/llmsite/settings.py and change LLM_MODULE to either "qwen", "mistral" or "llama" depending on the model you wish to use.
+- Only the Qwen path has been exercised end to end. The Mistral and LLaMA
+  specs share the same code path but have not been run against real weights
+  since the adapters were consolidated.
+- LLaMA is driven through a hand-written chat template rather than the one its
+  tokenizer ships. See the comment in `code/llmsite/languagemodel.py`.
+- SQLite and Django's development server are the defaults. Neither is sized for
+  more than a classroom.
 
 
 ## Contributing
@@ -170,7 +179,6 @@ python manage.py migrate tutor
 - [Deployment Guide](docs/DEPLOYMENT.md) - Technical setup and operational guidance for the Django application.
 - [Admin Operations Guide](docs/ADMIN_OPERATIONS.md) - Staff workflows for accounts, curriculum, exports, and maintenance.
 - [User Manual](docs/USER_MANUAL.md) - Client-facing usage guide for students, teachers, and admins.
-- [Model Selector Utility](docs/MODEL_SELECTOR.md) - Notes for the separate Windows model configuration tool.
 - [Known Limitations](docs/KNOWN_LIMITATIONS.md) - Current technical and operational limits.
 
 - [Sprint 6 Report](docs/Reports/SPRINT_6_REPORT.md) – Sprint 6 latest overview of work completed and unfinished work.

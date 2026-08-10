@@ -2,7 +2,7 @@ from django.urls import path
 from . import views
 
 from .views import (
-    chat_page, api_new_session, api_init, api_chat, api_reset, api_new_session, signup, 
+    chat_page, api_new_session, api_chat, api_reset, signup,
     dashboard_page, account_create, account_delete, student_edit, account_password_edit,
     upload_curriculum, curriculum_delete, curriculum_view,
     api_session_messages, api_delete_session, api_list_sessions, api_rename_session, api_export_chats,
@@ -16,7 +16,6 @@ urlpatterns = [
     path("signup/", signup, name="signup"),
     path("dashboard/", dashboard_page, name="dashboard"),
     path("progress/", progress_detail, name="progress_detail"),
-    path("api/init/", api_init, name="api_init"),
     path("api/session/new/", api_new_session, name="api_new_session"),
     path("api/chat/", api_chat, name="api_chat"),
     path("api/grade-quiz/", views.api_grade_quiz, name="api_grade_quiz"),
