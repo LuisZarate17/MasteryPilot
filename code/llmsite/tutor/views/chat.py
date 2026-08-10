@@ -54,6 +54,36 @@ def ensure_llm_initialized():
             model = tokenizer = None
 
 
+def _is_bootstrap_user_message(text: str) -> bool:
+    """True for the student-information turn the backend sends on start_chat.
+
+    It is stored with role="user" so the model sees the conversation it
+    actually had, but the student never typed it, so it must not be shown in
+    chat history and must not count as their first message.
+    """
+    if not text:
+        return False
+    stripped = text.lstrip()
+    if stripped.startswith("Here is your student information"):
+        return True
+    # Bare "Name:/School:/Grade:" shape, written by adapters predating the
+    # consolidation in languagemodel.py. Kept so upgraded deployments do not
+    # start showing the bootstrap turn in old sessions.
+    if stripped.startswith("Name:") and "School:" in stripped and "Grade:" in stripped:
+        return True
+    return False
+
+
+def _has_student_message(session) -> bool:
+    """True once the student has sent a message of their own."""
+    return any(
+        not _is_bootstrap_user_message(m)
+        for m in DBChat.objects.filter(session=session, role="user").values_list(
+            "message", flat=True
+        )
+    )
+
+
 def _load_messages_from_db(request):
     """Reconstruct the LLM messages list from DB for the current session."""
     session_id = request.session.get("session_id")
@@ -242,20 +272,24 @@ def api_chat(request):
         if session_id:
             session = Session.objects.get(id=session_id, owner=request.user)
 
-            # Auto-title from the first user message if title is still the default.
-            # Ask the LLM for a 1-3 word topic; if it returns empty (gibberish /
-            # no clear topic) leave the title alone.
-            if session.title in ("", "New session"):
-                if not DBChat.objects.filter(session=session, role="user").exists():
-                    try:
-                        derived = _derive_session_title(msg)
-                    except Exception as e:
-                        print(f"[api_chat] DeriveSessionTitle error: {e}")
-                        derived = ""
-                    if derived:
-                        session.title = derived
-                        session.save(update_fields=["title"])
-                        new_session_title = session.title
+            # Auto-title from the first user message if title is still the
+            # default. Ask the LLM for a 1-3 word topic; if it returns empty
+            # (gibberish / no clear topic) leave the title alone.
+            #
+            # "First" means the first message the student actually typed. The
+            # bootstrap turn start_chat persists is also role="user", so a bare
+            # .exists() check here was true on every request and auto-titling
+            # never ran.
+            if session.title in ("", "New session") and not _has_student_message(session):
+                try:
+                    derived = _derive_session_title(msg)
+                except Exception as e:
+                    print(f"[api_chat] derive_session_title error: {e}")
+                    derived = ""
+                if derived:
+                    session.title = derived
+                    session.save(update_fields=["title"])
+                    new_session_title = session.title
 
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
@@ -341,19 +375,6 @@ def api_session_messages(request, session_id):
     #   1. role="system" rows (the tutor instructions block)
     #   2. The auto-generated "Here is your student information..." user
     #      message the backend sends on start_chat — the student never typed it.
-    def _is_bootstrap_user_message(text: str) -> bool:
-        if not text:
-            return False
-        stripped = text.lstrip()
-        if stripped.startswith("Here is your student information"):
-            return True
-        # Bare "Name:/School:/Grade:" shape, written by adapters predating the
-        # consolidation in languagemodel.py. Kept so upgraded deployments do not
-        # start showing the bootstrap turn in old sessions.
-        if stripped.startswith("Name:") and "School:" in stripped and "Grade:" in stripped:
-            return True
-        return False
-
     messages = [
         {"role": c.role, "text": c.message}
         for c in chats
