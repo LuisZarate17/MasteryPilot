@@ -1,27 +1,22 @@
-from django.http import FileResponse, Http404, HttpResponseRedirect, JsonResponse, HttpResponseBadRequest, HttpResponse
-from django.contrib.auth.models import AnonymousUser
-from django.shortcuts import render
-from django.views.decorators.http import require_http_methods, require_GET
-from django.contrib.auth.decorators import login_required, user_passes_test
-from django.contrib.auth import login, get_user_model
-from django.shortcuts import render, redirect, get_object_or_404
+"""Tutoring chat: LLM bootstrap, sessions, messages, and quizzes."""
+
 from django.conf import settings
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponseBadRequest, JsonResponse
+from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
-from django.utils._os import safe_join
-from django.utils.text import get_valid_filename
-from .forms import SignupForm, UploadRagForm
+from django.views.decorators.http import require_GET, require_http_methods
 import json
-import os
 import re
-import csv
 
-from .models import Quiz, QuizAnswer, Session, Chat as DBChat, StudentProgress
-from .utils import is_teacher_or_admin, is_admin, calculate_student_progress, parse_csv_answers
-from .models import TeacherProfile, AdminProfile, StudentProfile
+from ..models import Chat as DBChat, Quiz, QuizAnswer, Session
+from ..models import StudentProfile, TeacherProfile
+from ..utils import calculate_student_progress, is_admin, is_teacher_or_admin, parse_csv_answers
 
-# Process-wide cache. The weights are several GB, so they are loaded once on
-# first use and reused for the life of the worker.
+
 model = None
+
+
 tokenizer = None
 
 
@@ -42,6 +37,7 @@ def _derive_session_title(first_message: str) -> str:
     except Exception as e:
         print(f"[_derive_session_title] error: {e}")
         return ""
+
 
 def ensure_llm_initialized():
     """Load the model and tokenizer if they are not loaded yet.
@@ -69,29 +65,6 @@ def _load_messages_from_db(request):
         return None
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")
     return [{"role": c.role, "content": c.message} for c in chats]
-
-
-def _split_full_name(full_name: str) -> tuple[str, str, str]:
-    cleaned = (full_name or "").strip()
-    if not cleaned:
-        return "", "", ""
-
-    parts = cleaned.split(None, 1)
-    first_name = parts[0]
-    last_name = parts[1] if len(parts) > 1 else ""
-    return cleaned, first_name, last_name
-
-
-def _display_name_for_user(user, explicit_name: str = "") -> str:
-    explicit = (explicit_name or "").strip()
-    if explicit:
-        return explicit
-
-    full_name = (user.get_full_name() or "").strip()
-    if full_name:
-        return full_name
-
-    return user.username
 
 
 def _try_extract_quiz_json(text: str):
@@ -158,299 +131,12 @@ def _maybe_persist_quiz(session, assistant_reply_text):
     return True
 
 
-@login_required
-def landing_page(request):
-    """
-    Authenticated landing page for students.
-    Shows welcome message, progress summary widget, and CTAs.
-    Teachers/admins are redirected to dashboard.
-    """
-    if is_teacher_or_admin(request.user):
-        return redirect("dashboard")
-    
-    # Get or calculate progress for the current user
-    try:
-        progress = StudentProgress.objects.get(user=request.user)
-    except StudentProgress.DoesNotExist:
-        # First time user - calculate initial progress
-        calculate_student_progress(request.user)
-        progress = StudentProgress.objects.get(user=request.user)
-        
-    quiz_avg = None
-    if progress.quiz_average:
-        quiz_avg = progress.quiz_average * 100
-
-    context = {
-        'progress': progress,
-        'quiz_avg': quiz_avg,
-        'has_activity': progress.total_sessions > 0 or progress.total_quizzes > 0,
-    }
-    
-    return render(request, "landing.html", context)
-
-
 @login_required(login_url="login")
 def chat_page(request):
     if is_teacher_or_admin(request.user):
         return redirect("dashboard")
     ensure_llm_initialized()
     return render(request, "chat.html")
-
-@login_required(login_url="login")
-@user_passes_test(is_teacher_or_admin)
-def chat_history(request):
-    return render(request, "chat_history.html")
-
-@login_required
-@user_passes_test(is_teacher_or_admin)
-def dashboard_page(request):
-    teachers = TeacherProfile.objects.select_related("user").all()
-    admins = AdminProfile.objects.select_related("user").all()
-    is_admin_flag = is_admin(request.user)
-    try:
-        teacher_profile = TeacherProfile.objects.get(user=request.user)
-    except TeacherProfile.DoesNotExist:
-        teacher_profile = None
-
-    is_teacher_flag = teacher_profile is not None
-
-    # Provide all students to admins
-    if is_admin_flag:
-        students = StudentProfile.objects.select_related("user", "teacher").all()
-    # Provide only assigned students to teachers
-    elif is_teacher_flag:
-        students = StudentProfile.objects.select_related("user", "teacher").filter(
-            teacher=teacher_profile
-        )
-    else:
-        students = StudentProfile.objects.none()
-
-    files = []
-    if os.path.exists(settings.CURRICULUM_ROOT):
-        files = sorted(os.listdir(settings.CURRICULUM_ROOT))
-
-    # Get intervention list
-    intervention_list = []
-    intervention_alert = False
-    for student in students:
-        progress = StudentProgress.objects.filter(user=student.user).first()
-        if progress is None:
-            continue
-
-        if progress.quiz_average is None:
-            continue
-
-        if progress.quiz_average < 0.7:
-            if progress.quiz_average < 0.5:
-                intervention_list.append((student, 1))
-                intervention_alert = True
-            else:
-                intervention_list.append((student, 0))
-                
-
-    context = {
-        "intervention_alert": intervention_alert,
-        "teachers": teachers,
-        "admins": admins,
-        "students": students,
-        "intervention_list": intervention_list,
-        "curriculum_files": files,
-        "is_admin": is_admin_flag,
-        "is_teacher": is_teacher_flag,
-    }
-
-    return render(request, "dashboard_admin_mentor.html", context)
-
-
-@login_required
-@user_passes_test(is_teacher_or_admin)
-def curriculum_view(request, filename):
-    try:
-        path = safe_join(settings.CURRICULUM_ROOT, filename)
-    except ValueError:
-        raise Http404("Invalid file path")
-
-    if not os.path.isfile(path):
-        raise Http404("File not found")
-
-    return FileResponse(open(path, "rb"), as_attachment=False)
-
-@login_required
-@user_passes_test(is_admin)
-@require_http_methods(["POST"])
-def curriculum_delete(request):
-    filename = request.POST.get("filename") or ""
-    safe_name = os.path.basename(filename)
-    path = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
-
-    if not path.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
-        return redirect("dashboard")
-
-    if os.path.exists(path):
-        os.remove(path)
-
-    return redirect("dashboard")
-
-
-def signup(request):
-    if request.method == "POST":
-        form = SignupForm(request.POST)
-        if form.is_valid():
-            user = form.save()
-            login(request, user)
-            return redirect("/")
-    else:
-        form = SignupForm()
-    return render(request, "signup.html", {"form": form})
-
-
-@require_http_methods(["POST"])
-@login_required
-@user_passes_test(is_admin)
-def account_create(request):
-    User = get_user_model()
-
-    role = (request.POST.get("role") or "").strip()
-    username = (request.POST.get("username") or "").strip()
-    full_name = (request.POST.get("full_name") or "").strip()
-    email = (request.POST.get("email") or "").strip()
-    password = request.POST.get("password") or ""
-
-    grade = (request.POST.get("grade") or "").strip()
-    classes = (request.POST.get("classes") or "").strip()
-
-    if not role or not username or not password:
-        return redirect("dashboard")
-    
-    if User.objects.filter(username=username).exists():
-        return redirect("dashboard")
-
-    _, first_name, last_name = _split_full_name(full_name)
-    
-    user = User.objects.create_user(
-        username=username,
-        email=email,
-        password=password,
-        first_name=first_name,
-        last_name=last_name,
-    )
-
-    display_name = _display_name_for_user(user, full_name)
-
-    if role == "teacher":
-        TeacherProfile.objects.create(user=user, display_name=display_name)
-    elif role == "admin":
-        AdminProfile.objects.create(user=user, display_name=display_name)
-    elif role == "student":
-        StudentProfile.objects.create(
-            user=user,
-            display_name=display_name,
-            grade=grade,
-            classes=classes,
-        )
-    else:
-        user.delete()
-
-    return redirect("dashboard")
-
-
-@require_http_methods(["POST"])
-@login_required
-@user_passes_test(is_admin)
-def account_password_edit(request):
-    user_id_raw = request.POST.get("user_id")
-    pw = request.POST.get("password")
-    pwc = request.POST.get("password_confirm")
-
-
-    if pw == pwc:
-        
-        # Guard against missing or non numeric student id
-        try:
-            user_id = int(user_id_raw)
-        except (TypeError, ValueError):
-            return redirect("dashboard")
-
-
-        User = get_user_model()
-
-
-        try:
-            user = User.objects.get(id=user_id)
-            user.set_password(pw)
-            user.save()
-
-        except User.DoesNotExist:
-            pass
-        
-    return redirect("dashboard")
-
-
-@require_http_methods(["POST"])
-@login_required
-@user_passes_test(is_admin)
-def account_delete(request):
-    User = get_user_model()
-
-    user_id = request.POST.get("user_id")
-    role = (request.POST.get("role") or "").strip()
-
-    if not user_id:
-        return redirect("dashboard")
-
-    try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        return redirect("dashboard")
-
-    # Do not let an admin delete themselves
-    if user == request.user:
-        return redirect("dashboard")
-
-    user.delete()
-
-    return redirect("dashboard")
-
-
-@require_http_methods(["POST"])
-@login_required
-@user_passes_test(is_admin)
-def student_edit(request):
-    student_id_raw = request.POST.get("student_id")
-    classes = (request.POST.get("classes") or "").strip()
-    teacher_id_raw = request.POST.get("teacher_id")
-    pw = request.POST.get("password")
-    pwc = request.POST.get("password_confirm")
-
-    # Guard against missing or non numeric student id
-    try:
-        student_id = int(student_id_raw)
-    except (TypeError, ValueError):
-        return redirect("dashboard")
-
-    try:
-        student = StudentProfile.objects.get(id=student_id)
-    except StudentProfile.DoesNotExist:
-        return redirect("dashboard")
-
-    student.classes = classes
-
-    # Clean teacher id too
-    teacher = None
-    if teacher_id_raw not in (None, "", "undefined"):
-        try:
-            teacher_id = int(teacher_id_raw)
-            teacher = TeacherProfile.objects.get(id=teacher_id)
-        except (ValueError, TeacherProfile.DoesNotExist):
-            teacher = None
-
-    student.teacher = teacher
-    if pw == pwc:
-        student.user.set_password(pw)
-    student.save()
-    student.user.save()
-
-    return redirect("dashboard")
 
 
 @require_http_methods(["POST"])
@@ -514,7 +200,6 @@ def api_new_session(request):
         "createdAt": session.created_at.isoformat(),
         "model_text": assistant_msg
     })
-
 
 
 @require_http_methods(["POST"])
@@ -602,279 +287,6 @@ def api_reset(request):
 
 
 @login_required
-@require_http_methods(["GET"])
-def progress_summary(request):
-    """
-    API endpoint to fetch student progress summary.
-    """
-    user = request.user
-    metrics = calculate_student_progress(user)
-    
-    if metrics['total_sessions'] == 0:
-        next_step = "Start your first chat session"
-    elif metrics['total_quizzes'] == 0:
-        next_step = "Complete your first quiz"
-    elif metrics['quiz_average'] and metrics['quiz_average'] < 70:
-        next_step = "Review topics and improve quiz scores"
-    else:
-        next_step = "Continue learning with new topics"
-    
-    return JsonResponse({
-        'ok': True,
-        'overall_completion_percent': metrics['overall_completion_percent'],
-        'current_module': metrics['current_module'],
-        'last_activity': metrics['last_activity'],
-        'activity_streak': metrics['activity_streak'],
-        'next_step': next_step,
-        'total_sessions': metrics['total_sessions'],
-        'total_quizzes': metrics['total_quizzes'],
-        'total_messages': metrics['total_messages'],
-        'quiz_average': metrics['quiz_average'],
-    })
-
-
-@login_required
-def progress_detail(request):
-    """
-    Full progress dashboard with charts, history, and detailed metrics.
-    """
-    student_id = request.GET.get('student_id')
-    
-    if student_id and is_teacher_or_admin(request.user):
-        try:
-            User = get_user_model()
-            student_user = User.objects.get(id=student_id)
-            
-            if not is_admin(request.user):
-                teacher_profile = TeacherProfile.objects.get(user=request.user)
-                student_profile = StudentProfile.objects.get(user=student_user)
-                if student_profile.teacher != teacher_profile:
-                    return JsonResponse({'error': 'Access denied'}, status=403)
-            
-            target_user = student_user
-        except (User.DoesNotExist, TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
-            return JsonResponse({'error': 'Student not found'}, status=404)
-    else:
-        target_user = request.user
-    
-    metrics = calculate_student_progress(target_user)
-    
-    try:
-        progress = StudentProgress.objects.get(user=target_user)
-    except StudentProgress.DoesNotExist:
-        progress = None
-    
-    sessions = Session.objects.filter(owner=target_user).order_by('-created_at')[:20]
-    session_history = []
-    
-    for session in sessions:
-        quizzes = session.quizzes.filter(status='graded')
-        quiz_count = quizzes.count()
-        
-        session_quiz_avg = None
-        if quiz_count > 0:
-            quiz_scores = []
-            for quiz in quizzes:
-                quiz_answer = quiz.answers.first()
-                if quiz_answer and quiz_answer.graded_json:
-                    correct = sum(1 for item in quiz_answer.graded_json.values() 
-                                  if isinstance(item, dict) and item.get('isCorrect'))
-                    total = len(quiz_answer.graded_json)
-                    if total > 0:
-                        quiz_scores.append((correct / total) * 100)
-            
-            if quiz_scores:
-                session_quiz_avg = sum(quiz_scores) / len(quiz_scores)
-        
-        session_history.append({
-            'id': str(session.id),
-            'title': session.title,
-            'created_at': session.created_at.isoformat(),
-            'quiz_count': quiz_count,
-            'quiz_average': round(session_quiz_avg, 2) if session_quiz_avg else None,
-        })
-    
-    context = {
-        'target_user': target_user,
-        'metrics': metrics,
-        'progress': progress,
-        'session_history': session_history,
-        'is_viewing_other': student_id is not None,
-    }
-    
-    return render(request, 'progress_detail.html', context)
-
-
-ALLOWED_UPLOAD_TYPES = {
-    "txt": "text/plain",
-    "pdf": "application/pdf",
-}
-MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
-
-
-@login_required
-@user_passes_test(is_teacher_or_admin)
-@require_http_methods(["POST"])
-def upload_curriculum(request):
-    title = (request.POST.get("title") or "").strip()
-    file = request.FILES.get("file")
-
-    if not file:
-        return redirect("dashboard")
-
-    if file.size > MAX_UPLOAD_SIZE:
-        return redirect("dashboard")
-
-    filename = get_valid_filename(file.name)
-
-    # Validate extension: use os.path.splitext to prevent double-extension bypass
-    _, dot_ext = os.path.splitext(filename)
-    ext = dot_ext.lstrip(".").lower()
-
-    if ext not in ALLOWED_UPLOAD_TYPES:
-        return redirect("dashboard")
-
-    # Verify MIME type matches expected content type
-    if file.content_type != ALLOWED_UPLOAD_TYPES[ext]:
-        return redirect("dashboard")
-
-    os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)
-
-    safe_name = os.path.basename(filename)
-    destination = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
-
-    if not destination.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
-        return redirect("dashboard")
-
-    with open(destination, "wb+") as dest:
-        for chunk in file.chunks():
-            dest.write(chunk)
-
-    return redirect("dashboard")
-
-
-@login_required
-@user_passes_test(is_teacher_or_admin)
-@require_GET
-def api_export_chats(request):
-    export_format = (request.GET.get("format") or "csv").strip().lower()
-    if export_format not in {"csv", "json"}:
-        return HttpResponseBadRequest("format must be csv or json")
-
-    student_id_raw = request.GET.get("student_id")
-    try:
-        student_id = int(student_id_raw)
-    except (TypeError, ValueError):
-        return HttpResponseBadRequest("student_id is required")
-
-    User = get_user_model()
-    try:
-        target_user = User.objects.get(id=student_id)
-    except User.DoesNotExist:
-        return JsonResponse({"error": "Student not found"}, status=404)
-
-    try:
-        target_student = StudentProfile.objects.get(user=target_user)
-    except StudentProfile.DoesNotExist:
-        return JsonResponse({"error": "Student not found"}, status=404)
-
-    # Admins can export any student.
-    # Teachers can export only students assigned to them.
-    if not is_admin(request.user):
-        try:
-            teacher_profile = TeacherProfile.objects.get(user=request.user)
-        except TeacherProfile.DoesNotExist:
-            return JsonResponse({"error": "Access denied"}, status=403)
-
-        if target_student.teacher_id != teacher_profile.id:
-            return JsonResponse({"error": "Access denied"}, status=403)
-
-    sessions = list(
-        Session.objects.filter(owner=target_user).order_by("created_at", "id")
-    )
-    session_ids = [s.id for s in sessions]
-    chats = (
-        DBChat.objects
-        .filter(session_id__in=session_ids)
-        .select_related("session")
-        .order_by("session__created_at", "created_at", "id")
-    )
-
-    exported_at = timezone.now()
-    exported_at_iso = exported_at.isoformat()
-    timestamp = exported_at.strftime("%Y%m%d_%H%M%S")
-    safe_username = re.sub(r"[^A-Za-z0-9_-]", "_", target_user.username)
-    filename = f"chat_export_{safe_username}_{timestamp}.{export_format}"
-
-    if export_format == "csv":
-        response = HttpResponse(content_type="text/csv; charset=utf-8")
-        response["Content-Disposition"] = f'attachment; filename="{filename}"'
-        writer = csv.writer(response)
-        writer.writerow([
-            "student_id",
-            "student_username",
-            "student_name",
-            "session_id",
-            "session_title",
-            "session_created_at",
-            "message_created_at",
-            "role",
-            "message",
-        ])
-
-        student_name = target_student.display_name or target_user.get_full_name() or target_user.username
-        for chat in chats:
-            writer.writerow([
-                target_user.id,
-                target_user.username,
-                student_name,
-                str(chat.session_id),
-                chat.session.title,
-                chat.session.created_at.isoformat(),
-                chat.created_at.isoformat(),
-                chat.role,
-                chat.message,
-            ])
-        return response
-
-    session_payload = {
-        str(s.id): {
-            "id": str(s.id),
-            "title": s.title,
-            "created_at": s.created_at.isoformat(),
-            "messages": [],
-        }
-        for s in sessions
-    }
-
-    for chat in chats:
-        session_payload[str(chat.session_id)]["messages"].append({
-            "id": str(chat.id),
-            "role": chat.role,
-            "text": chat.message,
-            "created_at": chat.created_at.isoformat(),
-        })
-
-    payload = {
-        "exported_at": exported_at_iso,
-        "student": {
-            "id": target_user.id,
-            "username": target_user.username,
-            "name": target_student.display_name or target_user.get_full_name() or target_user.username,
-            "email": target_user.email,
-        },
-        "sessions": list(session_payload.values()),
-    }
-
-    response = HttpResponse(
-        json.dumps(payload, indent=2),
-        content_type="application/json; charset=utf-8",
-    )
-    response["Content-Disposition"] = f'attachment; filename="{filename}"'
-    return response
-
-
-@login_required
 def api_list_sessions(request):
     """Return all sessions for the current user, or for a student if teacher/admin."""
     if not is_teacher_or_admin(request.user):
@@ -891,8 +303,6 @@ def api_list_sessions(request):
     print("api_list_sessions user=", request.user.username, "is_teacher=", is_teacher_or_admin(request.user), "GET=", dict(request.GET))
     data = [{"id": str(s.id), "title": s.title, "created_at": s.created_at.isoformat()} for s in sessions]
     return JsonResponse({"sessions": data})
-
-    
 
 
 @login_required

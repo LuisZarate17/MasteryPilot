@@ -20,7 +20,7 @@ Relevant code entry points:
 - `code/llmsite/manage.py`
 - `code/llmsite/llmsite/settings.py`
 - `code/llmsite/tutor/urls.py`
-- `code/llmsite/tutor/views.py`
+- `code/llmsite/tutor/views/` (chat, accounts, curriculum, progress)
 - `code/llmsite/tutor/models.py`
 
 ### 2. Historical project material

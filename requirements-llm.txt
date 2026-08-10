@@ -2,8 +2,8 @@
 #
 # Not needed to install the site, log in, browse the dashboard, or run the test
 # suite. Every package here is imported lazily, the first time a chat starts
-# (see ensure_llm_initialized() in code/llmsite/tutor/views.py). Install it when
-# you want the tutor to actually answer.
+# (see ensure_llm_initialized() in code/llmsite/tutor/views/chat.py). Install
+# it when you want the tutor to actually answer.
 #
 # Expect roughly 3-5 GB on disk, most of it torch.
 #
