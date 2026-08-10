@@ -15,4 +15,4 @@ This folder contains the handoff documentation for the AI Tutor project.
 - Sponsors and technical reviewers should start with the handoff overview.
 - Developers and operators should use the deployment and admin guides.
 - Client users should use the user manual.
-- Teams managing local model configuration should use the model selector guide.
+- Teams managing local model configuration should use the configuration section of the deployment guide, which covers `LLM_MODULE` and `LANGUAGE_MODEL_ID`.

@@ -90,7 +90,7 @@ The handoff package should clearly distinguish:
 - Main deployable system: `code/llmsite`
 - Historical artifacts: sprint reports and presentations
 
-A Windows Forms model-selector utility used to live under `model_selector_app/`. It was removed: it wrote the chosen model id by overwriting the whole target `.env` with a single line, which destroys `DJANGO_SECRET_KEY` and every other setting the application needs. Model selection is now `LLM_MODULE` and `LANGUAGE_MODEL_ID` in `.env`.
+A Windows Forms model-selector utility used to live under `model_selector_app/`. It has been removed; model selection is now `LLM_MODULE` and `LANGUAGE_MODEL_ID` in `.env`.
 
 ## Recommended Handoff Deliverables
 
@@ -98,7 +98,6 @@ A Windows Forms model-selector utility used to live under `model_selector_app/`.
 - A deployment guide for technical setup and operations.
 - An admin operations guide for account and curriculum management.
 - A user manual for student, teacher, and admin usage.
-- A model selector guide for local model configuration workflows.
 - A known limitations document for realistic transition planning.
 
 ## Suggested Sponsor Talking Points
@@ -106,5 +105,4 @@ A Windows Forms model-selector utility used to live under `model_selector_app/`.
 - The project is functional as a prototype with real user-role workflows.
 - The most mature surface is the Django web application.
 - Deployment is feasible for pilot use, but current settings and storage choices are not fully production hardened.
-- The desktop model selector is an operator utility, not a client-facing feature.
 - Future hardening should focus on infrastructure, secrets handling, database strategy, and formal deployment ownership.

@@ -105,7 +105,6 @@ ADMIN_PASS=${ADMIN_PASS}
 # without ADMIN_PASS as a half-finished configuration and refuses to run.
 # ADMIN_USER=admin
 # ADMIN_EMAIL=
-# GEMINI_API_KEY=
 EOF
 
   # No-op on Windows/Git Bash, where chmod does not map onto NTFS ACLs.

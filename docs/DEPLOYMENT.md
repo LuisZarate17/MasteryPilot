@@ -2,11 +2,7 @@
 
 ## Overview
 
-The main deployable application in this repository is the Django project in `code/llmsite`. The included `setup.sh` script is the closest thing to an operational reference deployment. It creates a virtual environment, installs the core requirements, writes a repository-root `.env` if one does not exist, and runs migrations. Passing `--serve` also starts Gunicorn in the foreground. It requires no root and writes nothing outside the repository.
-
-## Deployment Scope
-
-This guide covers the Django web application only. It does not deploy the Windows model selector utility.
+The main deployable application in this repository is the Django project in `code/llmsite`, and this guide covers it. The included `setup.sh` script is the closest thing to an operational reference deployment. It creates a virtual environment, installs the core requirements, writes a repository-root `.env` if one does not exist, and runs migrations. Passing `--serve` also starts Gunicorn in the foreground. It requires no root and writes nothing outside the repository.
 
 ## Runtime Components
 

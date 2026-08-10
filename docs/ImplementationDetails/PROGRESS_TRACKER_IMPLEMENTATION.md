@@ -26,7 +26,7 @@ Built `calculate_student_progress(user)` function with:
 - **Smart caching**: Saves results to StudentProgress model
 - **Empty state handling**: Returns zeros for new users
 
-### 3. **API Endpoints** (`views.py`)
+### 3. **API Endpoints** (`views/progress.py`)
 Added two endpoints:
 
 #### `progress_summary(request)` - GET `/api/progress/summary/`
@@ -62,7 +62,7 @@ Updated routes:
 - `/progress/` → `progress_detail` (full dashboard)
 - `/api/progress/summary/` → `progress_summary` (JSON API)
 
-### 6. **Progress Refresh Triggers** (`views.py`)
+### 6. **Progress Refresh Triggers** (`views/progress.py`)
 Added automatic refresh hooks:
 - **New session creation**: Recalculates progress immediately
 - **Chat messages**: Refreshes every 5th message to reduce overhead
@@ -152,7 +152,7 @@ overall_completion = quiz_component + session_component
 ### Modified:
 - `llmsite/tutor/models.py` - Added StudentProgress model
 - `llmsite/tutor/utils.py` - Added progress calculation functions
-- `llmsite/tutor/views.py` - Added landing_page, progress_summary, progress_detail views + refresh hooks
+- `llmsite/tutor/views/progress.py` - Added landing_page, progress_summary, progress_detail views + refresh hooks
 - `llmsite/tutor/urls.py` - Updated routing
 - `llmsite/tutor/admin.py` - Registered new models
 - `todo.md` - Updated progress

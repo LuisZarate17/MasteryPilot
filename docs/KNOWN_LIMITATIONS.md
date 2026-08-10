@@ -6,21 +6,19 @@ This project is functional as a prototype, but several current implementation ch
 
 ## Architecture and Deployment Limits
 
-- The primary deployment guidance is Linux-oriented, while parts of the repository assume Windows tooling.
-- The root repository layout is ambiguous because it contains both the Django app and a separate Windows desktop utility.
+- `setup.sh` and the Gunicorn serving path are Linux-only. Windows development is supported through `manage.py runserver`, which is not a production server.
 - The default database is SQLite, which is simple for prototypes but limited for larger concurrent deployments.
 - The included deployment process starts Gunicorn directly and does not include a full service-management or reverse-proxy setup.
 
 ## Security and Configuration Limits
 
-- `ALLOWED_HOSTS` is currently permissive.
-- Password reset email uses Django's console email backend by default.
-- Environment and secret management are not fully documented in the original repository materials.
-- Production-hardening guidance is not encoded directly into the application configuration.
+- `ALLOWED_HOSTS` defaults to `localhost,127.0.0.1`. Operators must set `DJANGO_ALLOWED_HOSTS` before any other machine can reach the site, and a wrong value fails as a refused request rather than an obvious error.
+- Password reset email uses Django's console email backend by default, so reset links are printed to the server log instead of being delivered.
+- The transport-hardening switches exist and are documented (`DJANGO_SECURE_COOKIES`, `DJANGO_SECURE_SSL_REDIRECT`, `DJANGO_TRUST_PROXY_SSL_HEADER`), but no TLS terminator or reverse proxy ships with the project. Serving HTTPS is left to the deployer.
 
 ## Model and AI Runtime Limits
 
-- The project includes heavy local-model dependencies and likely requires environment-specific runtime validation.
+- Local inference dependencies are heavy — roughly 3-5 GB, mostly torch — and are split into `requirements-llm.txt`. The site installs, runs, and passes its tests without them, but the tutor cannot answer until they are installed.
 - Only the Qwen path has been exercised end to end. Mistral and LLaMA share the same code path but have not been run against real weights.
 - LLaMA is driven through a hand-written chat template rather than the one its tokenizer provides.
 - Inference is local-only. There is no hosted-API fallback, so a machine without a suitable GPU cannot answer chats.
@@ -44,7 +42,6 @@ This project is functional as a prototype, but several current implementation ch
 
 The original repository documentation did not adequately separate:
 
-- Deployable application vs auxiliary tooling
 - Sponsor context vs operator instructions
 - Admin workflows vs end-user workflows
 
