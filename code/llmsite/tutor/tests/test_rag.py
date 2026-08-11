@@ -1017,16 +1017,27 @@ class RetrieveTests(RagTestCase):
 
         self.assertNotIn("score", rag.default_index.documents[0])
 
-    def test_a_lexical_match_the_dense_leg_ranked_last_can_win(self):
-        """The point of the sparse leg: dense ordering is not the final word."""
+    def test_a_lexical_match_the_dense_leg_ranked_second_can_win(self):
+        """The point of the sparse leg: dense ordering is not the final word.
+
+        Both candidates are competitive on cosine — a genuinely weak one would
+        be pruned before fusion ever saw it — and the rare term decides.
+        """
         rag.default_index.documents = [
             doc("a passage about fractions and denominators"),
             doc("a passage about the discriminant of a quadratic"),
         ]
         # Dense prefers document 0; the query's rare term is only in document 1.
-        self.install_fakes([0.9, 0.5], [0, 1])
+        self.install_fakes([0.9, 0.75], [0, 1])
 
         self.assertEqual(self.texts("discriminant")[0], rag.default_index.documents[1]["text"])
+
+    def test_a_dense_hit_far_below_the_best_is_pruned_before_fusion(self):
+        """Otherwise a weak passage rides into the results on rank alone."""
+        rag.default_index.documents = [doc("strong match"), doc("unrelated filler")]
+        self.install_fakes([0.9, 0.2], [0, 1])
+
+        self.assertEqual(self.texts("strong"), ["strong match"])
 
     def test_no_more_than_top_k_come_back(self):
         rag.default_index.documents = [doc(f"passage {i}") for i in range(20)]
@@ -1550,3 +1561,44 @@ class RetrievalQueryTests(RagTestCase):
 
     def test_no_history_and_no_message_is_empty(self):
         self.assertEqual(rag.build_retrieval_query("", []), "")
+
+
+class PruneToBestTests(RagTestCase):
+    """Relevance judged against the best hit, not against a guessed constant."""
+
+    def test_a_weak_hit_beside_a_strong_one_is_dropped(self):
+        pruned = rag.prune_to_best([("a", 0.90), ("b", 0.20)], ratio=0.6)
+
+        self.assertEqual([key for key, _ in pruned], ["a"])
+
+    def test_a_competitive_hit_is_kept(self):
+        pruned = rag.prune_to_best([("a", 0.90), ("b", 0.80)], ratio=0.6)
+
+        self.assertEqual([key for key, _ in pruned], ["a", "b"])
+
+    def test_a_hit_exactly_at_the_ratio_is_kept(self):
+        pruned = rag.prune_to_best([("a", 1.0), ("b", 0.6)], ratio=0.6)
+
+        self.assertEqual(len(pruned), 2)
+
+    def test_the_threshold_falls_with_the_best_score(self):
+        """A hard question keeps its several plausible passages.
+
+        The same 0.30 candidate is dropped beside a confident winner and kept
+        when everything is marginal — which is the behaviour a fixed floor
+        cannot express.
+        """
+        self.assertEqual(len(rag.prune_to_best([("a", 0.90), ("b", 0.30)], ratio=0.6)), 1)
+        self.assertEqual(len(rag.prune_to_best([("a", 0.40), ("b", 0.30)], ratio=0.6)), 2)
+
+    def test_the_best_hit_always_survives(self):
+        self.assertEqual(len(rag.prune_to_best([("a", 0.01)], ratio=0.6)), 1)
+
+    def test_an_empty_list_is_returned_unchanged(self):
+        self.assertEqual(rag.prune_to_best([]), [])
+
+    def test_non_positive_scores_are_left_alone(self):
+        """A ratio of a negative number does not mean anything."""
+        scored = [("a", -0.1), ("b", -0.5)]
+
+        self.assertEqual(rag.prune_to_best(scored, ratio=0.6), scored)

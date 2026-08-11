@@ -7,7 +7,7 @@
 > hashes here diverge from upstream.
 > Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
 
-**Stack:** Python 3.13 · Django · SQLite · local LLM inference (Qwen3 / LLaMA / Mistral) · hybrid RAG retrieval
+**Stack:** Python 3.13 · Django · SQLite · local LLM inference (Qwen3 / LLaMA / Mistral) · hybrid RAG retrieval (dense FAISS + BM25, fused on rank)
 
 ## Project summary
 

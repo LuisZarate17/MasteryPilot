@@ -19,16 +19,25 @@ This project is functional as a prototype, but several current implementation ch
 ## Model and AI Runtime Limits
 
 - Local inference dependencies are heavy — roughly 3-5 GB, mostly torch — and are split into `requirements-llm.txt`. The site installs, runs, and passes its tests without them, but the tutor cannot answer until they are installed.
-- Only the Qwen path has been exercised end to end. Mistral and LLaMA share the same code path but have not been run against real weights.
+- No model has been run against real weights on the development machine, for any of the three families. There is no GPU and `requirements-llm.txt` is not installed, so the generation path is reviewed rather than exercised. The test suite covers it against a fake adapter, which is deliberate — the suite must stay fast and GPU-free — but 400+ passing tests say nothing about a model emitting a token.
 - LLaMA is driven through a hand-written chat template rather than the one its tokenizer provides.
 - Inference is local-only. There is no hosted-API fallback, so a machine without a suitable GPU cannot answer chats.
+
+## Retrieval Limits
+
+- **Retrieval quality has never been measured on this machine.** `manage.py rag_eval` scores a labelled query set for recall, MRR and rejection accuracy, but it needs a real embedding model. Run the `rag-verify` GitHub Actions workflow (dispatch-only) to get numbers; until then, retrieval is reviewed and unit-tested, not measured.
+- The score floor that decides whether a question has an answer at all (`MIN_SCORE`) is the one value in the retrieval path that genuinely requires a calibrated model, and it has not had one. Everything downstream of it uses a relative cutoff instead, so being miscalibrated degrades the rejection of off-topic questions rather than the ranking of good ones.
+- Chunk size is set from the embedding model's context window rather than from measurement. `rag_eval --chunk-size` exists to settle it against real numbers.
+- Index invalidation is per process. Deleting curriculum takes effect immediately for the worker that handled the request, and at the next chat-session start for the others. Under a single worker — the default — this is not observable.
+- A curriculum change rebuilds the whole index rather than removing individual entries. This is deliberate: incremental removal requires renumbering FAISS ids in step with a parallel metadata list, and a mismatch there misattributes passages silently. Rebuilding a pilot-sized corpus takes seconds.
+- Retrieval is exact search up to 20,000 chunks and approximate above it. The approximate path has never run.
 
 ## Product and UX Limits
 
 - Some user interface content remains placeholder-oriented, especially in the chat sidebar notes/resources area.
 - Progress indicators are derived metrics and should not be treated as formal academic records.
 - Intervention status is based on simple quiz thresholds rather than a broader student-support model.
-- Curriculum upload supports only TXT and PDF files.
+- Curriculum upload supports TXT, Markdown, JSON, PDF and DOCX.
 - The curriculum library UI does not show upload timestamps.
 
 ## Administrative Limits

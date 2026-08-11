@@ -49,7 +49,20 @@ TOP_K         = 5     # chunks handed to the model
 # ranked seventh by one ranker and second by the other can still win.
 CANDIDATE_MULTIPLIER = 4
 MIN_CANDIDATES       = 20
-MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
+# Two different jobs, which is why there are two numbers rather than one.
+#
+# MIN_SCORE answers "does this corpus contain an answer at all". It has to be
+# absolute, because rejecting an off-topic question means comparing against
+# nothing. It is the one value in this module that genuinely needs a real
+# embedder to calibrate, and it has never had one.
+#
+# RELATIVE_CUTOFF answers "given the best hit, which others are worth
+# including". It is a ratio, so it adapts to whatever distribution the model
+# produces instead of trusting a constant nobody measured — and it prunes hard
+# when there is a clear winner while staying lenient when everything is
+# marginal, which is the behaviour you want in both cases.
+MIN_SCORE       = 0.25  # cosine floor (0.0–1.0); below this, nothing is relevant
+RELATIVE_CUTOFF = 0.6   # keep dense hits scoring at least this fraction of the best
 # How much of the conversation joins the query, so follow-ups like "why?" are
 # retrieved against what is being discussed rather than against three words.
 CONTEXT_TURNS = 2
@@ -480,6 +493,33 @@ def build_retrieval_query(message, previous_turns=(), turns=CONTEXT_TURNS,
     return f"{context} {message}".strip()
 
 
+def prune_to_best(scored, ratio=RELATIVE_CUTOFF):
+    """Drop entries scoring far below the best one.
+
+    A fixed similarity floor is a magic constant calibrated against nothing,
+    and on MiniLM 0.25 sits low enough in the noise band that it filters almost
+    nothing — the system effectively always returned its full top-k, off-topic
+    passages included. A ratio needs no calibration: it asks whether a
+    candidate is competitive with the winner rather than whether it clears a
+    number somebody guessed.
+
+    The behaviour it produces is the useful one in both directions. When there
+    is a clear winner it prunes hard, so a strong match is not padded out with
+    weak ones. When everything is marginal the threshold falls with it, so a
+    genuinely difficult question still gets its several plausible passages.
+
+    *scored* is [(key, score)], best first. Non-positive best scores are left
+    alone: a ratio of a negative number does not mean anything.
+    """
+    if not scored:
+        return []
+    best = scored[0][1]
+    if best <= 0:
+        return scored
+    threshold = best * ratio
+    return [entry for entry in scored if entry[1] >= threshold]
+
+
 def reciprocal_rank_fusion(rankings, k=RRF_K):
     """Combine ranked lists of document indices into one ordering.
 
@@ -905,7 +945,8 @@ class RagIndex:
                 continue
             if float(score) >= min_score:
                 found.append((int(index), float(score)))
-        return found
+
+        return prune_to_best(found, RELATIVE_CUTOFF)
 
     def retrieve(self, query, top_k=TOP_K, min_score=MIN_SCORE):
         """

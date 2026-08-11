@@ -76,11 +76,25 @@ Admins can update:
 ### Supported upload types
 
 - `.txt`
+- `.md` — headings become searchable context; fenced code blocks are preserved
+- `.json` — a list of `{"title": ..., "content": ...}` records, each indexed separately
 - `.pdf`
+- `.docx`
+
+A file whose extension is not on this list is rejected. A file that cannot be
+read — an encrypted or truncated PDF, say — is skipped during indexing with a
+message in the server log, and the rest of the curriculum still indexes.
 
 ### Upload limits
 
 - Maximum size: 100 MB
+
+### When changes take effect
+
+Uploading or deleting a file marks the search index stale. It is rebuilt the
+next time a chat session opens, which takes seconds for a pilot-sized
+curriculum. Deleted documents stop being retrievable at that point and stay
+gone across restarts — there is no cached copy to clear by hand.
 
 ### Curriculum storage
 
