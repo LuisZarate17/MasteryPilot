@@ -8,63 +8,43 @@
     {
       "chunk_idx": 1,
       "source": "flush_then_split.txt",
-      "text": "A quadratic equation is any equation that can be rearranged into the standard form ax squared plus bx plus c equals zero with a not equal to zero, and while some quadratics factor neatly over the integers, most do not, so you will need the quadratic formula or the method of completing the square, both of which are derived from the same underlying identity and both of which will give the same two r"
+      "text": "A quadratic equation is any equation that can be rearranged into the standard form ax squared plus bx plus c equals zero with a not equal to zero, and while some quadratics factor neatly over the integers, most do not, so you will need the quadratic formula or the method of completing the square, both of which are derived from the same underlying identity and both of which will give the same two roots whenever the discriminant is positive, the same repeated root when it is zero, and a pair of complex conjugates when it is negative, which is why the discriminant is worth computing first even when you intend to factor, since it tells you in one step whether factoring over the integers has any chance of succeeding and saves you the several minutes you would otherwise spend hunting for a pair of factors that was never going to exist, minutes that are far better spent checking the arithmetic "
     },
     {
       "chunk_idx": 2,
       "source": "flush_then_split.txt",
-      "text": "ved from the same underlying identity and both of which will give the same two roots whenever the discriminant is positive."
-    },
-    {
-      "chunk_idx": 3,
-      "source": "flush_then_split.txt",
-      "text": "oth of which will give the same two roots whenever the discriminant is positive."
+      "text": " and saves you the several minutes you would otherwise spend hunting for a pair of factors that was never going to exist, minutes that are far better spent checking the arithmetic of the substitution you are about to make into the formula, because a sign error there is by a wide margin the most common way of arriving at a confident and completely wrong pair of roots."
     }
   ],
   "long_sentence.txt": [
     {
       "chunk_idx": 0,
       "source": "long_sentence.txt",
-      "text": "When you are asked to simplify a rational expression you should begin by factoring both the numerator and the denominator completely, then cancel any factor that appears in both, remembering that you may only cancel factors and never terms, and that any value of the variable which would make the original denominator equal to zero must be excluded from the domain even if the factor causing it cance"
+      "text": "When you are asked to simplify a rational expression you should begin by factoring both the numerator and the denominator completely, then cancel any factor that appears in both, remembering that you may only cancel factors and never terms, and that any value of the variable which would make the original denominator equal to zero must be excluded from the domain even if the factor causing it cancels during simplification, which is a detail that many students overlook when they first meet these problems and which examiners test deliberately year after year, so it is worth writing the excluded values down at the moment you factor rather than trying to recover them at the end, because by then the expression in front of you no longer contains the factor that caused the exclusion and there is nothing left on the page to remind you that it was ever there, which is exactly the trap the question"
     },
     {
       "chunk_idx": 1,
       "source": "long_sentence.txt",
-      "text": "ual to zero must be excluded from the domain even if the factor causing it cancels during simplification, which is a detail that many students overlook when they first meet these problems and which examiners test deliberately year after year."
-    },
-    {
-      "chunk_idx": 2,
-      "source": "long_sentence.txt",
-      "text": "first meet these problems and which examiners test deliberately year after year."
+      "text": "nt of you no longer contains the factor that caused the exclusion and there is nothing left on the page to remind you that it was ever there, which is exactly the trap the question was built around in the first place."
     }
   ],
   "paragraphs.txt": [
     {
       "chunk_idx": 0,
       "source": "paragraphs.txt",
-      "text": "Fractions A fraction represents a part of a whole. The number below the line is the denominator and tells you how many equal parts the whole has been divided into. The number above the line is the numerator and tells you how many of those parts you have. Equivalent fractions Two fractions are equivalent when they represent the same amount."
-    },
-    {
-      "chunk_idx": 1,
-      "source": "paragraphs.txt",
-      "text": "lent fractions Two fractions are equivalent when they represent the same amount. Multiplying the numerator and the denominator by the same nonzero number always produces an equivalent fraction, because you are multiplying by a disguised form of one. Adding fractions To add two fractions they must share a denominator."
-    },
-    {
-      "chunk_idx": 2,
-      "source": "paragraphs.txt",
-      "text": "orm of one. Adding fractions To add two fractions they must share a denominator. Find the least common denominator, rewrite each fraction as an equivalent fraction over that denominator, then add the numerators and leave the denominator unchanged."
+      "text": "Fractions A fraction represents a part of a whole. The number below the line is the denominator and tells you how many equal parts the whole has been divided into. The number above the line is the numerator and tells you how many of those parts you have. Equivalent fractions Two fractions are equivalent when they represent the same amount. Multiplying the numerator and the denominator by the same nonzero number always produces an equivalent fraction, because you are multiplying by a disguised form of one. Adding fractions To add two fractions they must share a denominator. Find the least common denominator, rewrite each fraction as an equivalent fraction over that denominator, then add the numerators and leave the denominator unchanged."
     }
   ],
   "prose.txt": [
     {
       "chunk_idx": 0,
       "source": "prose.txt",
-      "text": "A linear equation in one variable can be written in the form ax + b = 0, where a and b are constants and a is not zero. Solving such an equation means finding the value of x that makes the statement true. The basic strategy is to isolate the variable on one side of the equals sign. You may add or subtract the same quantity from both sides without changing the solution."
+      "text": "A linear equation in one variable can be written in the form ax + b = 0, where a and b are constants and a is not zero. Solving such an equation means finding the value of x that makes the statement true. The basic strategy is to isolate the variable on one side of the equals sign. You may add or subtract the same quantity from both sides without changing the solution. You may also multiply or divide both sides by any nonzero number. Each of these operations produces an equivalent equation, one with exactly the same solution set. When the variable appears on both sides, collect like terms first. Always check your answer by substituting it back into the original equation. Word problems are usually harder than the algebra they contain. Read the problem twice before writing anything down."
     },
     {
       "chunk_idx": 1,
       "source": "prose.txt",
-      "text": "add or subtract the same quantity from both sides without changing the solution. You may also multiply or divide both sides by any nonzero number. Each of these operations produces an equivalent equation, one with exactly the same solution set. When the variable appears on both sides, collect like terms first. Always check your answer by substituting it back into the original equation."
+      "text": "your answer by substituting it back into the original equation. Word problems are usually harder than the algebra they contain. Read the problem twice before writing anything down. Decide what quantity the question is actually asking for and give it a name, then write every other quantity in terms of that same letter. Translate each sentence of the problem into a piece of the equation, in the order the sentences appear. Once the equation is written, solving it is the routine part. Finish by checking that the answer makes sense in the original situation, not merely that it satisfies the equation you wrote, because an equation set up incorrectly will still have a solution."
     }
   ],
   "short.txt": [
@@ -78,12 +58,7 @@
     {
       "chunk_idx": 0,
       "source": "unicode.txt",
-      "text": "The area of a circle is A = πr². For a right triangle, a² + b² = c², so c = √(a² + b²). Angles are measured in degrees (45°) or in radians (π/4 rad). Use × for multiplication and ÷ for division when writing by hand. The inequality symbols ≤ and ≥ mean \"less than or equal to\" and \"greater than or equal to\" — note the curly quotes and the em dash in this sentence."
-    },
-    {
-      "chunk_idx": 1,
-      "source": "unicode.txt",
-      "text": "ater than or equal to\" — note the curly quotes and the em dash in this sentence. Some students write θ for an unknown angle; others prefer α or β. Naïve rounding can introduce error, so keep at least three significant figures until the final step."
+      "text": "The area of a circle is A = πr². For a right triangle, a² + b² = c², so c = √(a² + b²). Angles are measured in degrees (45°) or in radians (π/4 rad). Use × for multiplication and ÷ for division when writing by hand. The inequality symbols ≤ and ≥ mean \"less than or equal to\" and \"greater than or equal to\" — note the curly quotes and the em dash in this sentence. Some students write θ for an unknown angle; others prefer α or β. Naïve rounding can introduce error, so keep at least three significant figures until the final step."
     }
   ]
 }

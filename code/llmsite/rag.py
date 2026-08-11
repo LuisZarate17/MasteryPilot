@@ -35,8 +35,13 @@ import json
 SIDECAR_VERSION = 2
 
 # ── Tuneable constants ────────────────────────────────────────────────────────
-CHUNK_SIZE    = 400   # target characters per chunk
-CHUNK_OVERLAP = 80    # characters carried forward into the next chunk
+# all-MiniLM-L6-v2 truncates at 256 word-pieces, roughly 1000 characters of
+# English prose. 400 used under half of that, so a concept that took a
+# paragraph to explain was routinely cut across two chunks and neither half
+# retrieved well. 900 leaves headroom for the heading prefix and for the
+# variance in how text maps to word-pieces; overlap follows at 20%.
+CHUNK_SIZE    = 900   # target characters per chunk
+CHUNK_OVERLAP = 180   # characters carried forward into the next chunk
 MIN_CHUNK_BUDGET = 120  # floor, so a deep heading path cannot starve the text
 TOP_K         = 5     # candidates retrieved before threshold filtering
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
@@ -133,7 +138,12 @@ def _split(text, size, overlap):
         else:
             current = candidate
 
-    if current:
+    # A trailing buffer that the previous piece already ends with adds nothing.
+    # The hard-split branch leaves `current` holding the tail of the sentence it
+    # just emitted, so a long sentence used to produce a final chunk that was
+    # pure duplicate — competing for a retrieval slot while carrying no text
+    # the ranked chunk above it did not already have.
+    if current and not (pieces and pieces[-1].endswith(current)):
         pieces.append(current)
     return pieces
 

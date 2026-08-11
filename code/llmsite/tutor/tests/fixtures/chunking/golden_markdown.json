@@ -2,12 +2,7 @@
   {
     "chunk_idx": 0,
     "source": "code_heavy.md",
-    "text": "Introduction to Loops\nA loop repeats a block of instructions. The for loop is the most common form\nwhen you know in advance how many repetitions you need. total = 0\nfor i in range(1, 11):\n    total = total + i\nprint(total) That program adds the whole numbers from 1 to 10 and prints 55. The variable\ntotal is called an accumulator because it accumulates the running sum."
-  },
-  {
-    "chunk_idx": 1,
-    "source": "code_heavy.md",
-    "text": "Introduction to Loops\nvariable\ntotal is called an accumulator because it accumulates the running sum. A while loop repeats for as long as a condition stays true: count = 10\nwhile count > 0:\n    print(count)\n    count = count - 1\nprint(\"Liftoff\") Be careful: if the condition never becomes false the loop runs forever. Always\nmake sure something inside the body changes the value the condition tests."
+    "text": "Introduction to Loops\nA loop repeats a block of instructions. The for loop is the most common form\nwhen you know in advance how many repetitions you need. total = 0\nfor i in range(1, 11):\n    total = total + i\nprint(total) That program adds the whole numbers from 1 to 10 and prints 55. The variable\ntotal is called an accumulator because it accumulates the running sum. A while loop repeats for as long as a condition stays true: count = 10\nwhile count > 0:\n    print(count)\n    count = count - 1\nprint(\"Liftoff\") Be careful: if the condition never becomes false the loop runs forever. Always\nmake sure something inside the body changes the value the condition tests."
   },
   {
     "chunk_idx": 0,

@@ -91,6 +91,41 @@ class ChunkTextTests(RagTestCase):
         self.assertEqual(chunks[0]["text"], "Short lead sentence.")
         self.assertEqual([c["chunk_idx"] for c in chunks], list(range(len(chunks))))
 
+    def test_no_trailing_chunk_merely_repeats_the_one_before_it(self):
+        """The hard-split branch emitted its overlap tail as a standalone chunk.
+
+        A long sentence produced a final chunk that was a pure suffix of the
+        chunk above it — no text of its own, but competing for one of the five
+        retrieval slots and pushing a genuinely different passage out.
+        """
+        text = "Lead sentence. " + "z" * (rag.CHUNK_SIZE * 2) + "."
+
+        chunks = [c["text"] for c in rag.chunk_text(text, "s.txt")]
+
+        self.assertGreater(len(chunks), 1)
+        self.assertFalse(
+            chunks[-2].endswith(chunks[-1]),
+            f"last chunk is contained in the one before it: {chunks[-1][:40]!r}",
+        )
+
+    def test_a_genuine_final_fragment_is_still_kept(self):
+        """Dropping the duplicate must not drop real trailing text."""
+        text = "First sentence here. " + "z" * (rag.CHUNK_SIZE + 50) + ". A real tail sentence."
+
+        chunks = [c["text"] for c in rag.chunk_text(text, "s.txt")]
+
+        self.assertIn("A real tail sentence.", chunks[-1])
+
+    def test_chunk_size_leaves_headroom_under_the_models_window(self):
+        """all-MiniLM-L6-v2 truncates at 256 word-pieces, roughly 1000 chars.
+
+        Chunks longer than the window are silently cut by the embedder, so the
+        tail of every chunk would contribute nothing to its vector while still
+        being shown to the model as if it had matched.
+        """
+        self.assertLessEqual(rag.CHUNK_SIZE, 1000)
+        self.assertGreater(rag.CHUNK_SIZE, 500, "well under the window wastes half of it")
+
     def test_source_is_carried_onto_every_chunk(self):
         text = " ".join(f"Sentence {i} with padding." for i in range(80))
 
