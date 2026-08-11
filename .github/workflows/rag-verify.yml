@@ -1,0 +1,114 @@
+# Executes the RAG path for real: a genuine embedding model and a genuine
+# FAISS index, which nothing else in this repository does.
+#
+# Dispatch-only, on purpose. tests.yml runs on every push with requirements.txt
+# alone, and that job is what enforces the install contract — anything that
+# starts importing torch at module scope has to fail there. Running this one on
+# push would install the heavy stack alongside it and quietly destroy that
+# guarantee. So this is a button you press, not a gate.
+#
+# Press it when: retrieval behaviour changed, chunking or ingestion changed, the
+# embedding model changed, or before publishing numbers about retrieval quality.
+#
+# Roughly 4 minutes warm, longer on the first run while the caches fill.
+
+name: rag-verify
+
+on:
+  workflow_dispatch:
+    inputs:
+      top_k:
+        description: "Candidates to retrieve per query"
+        required: false
+        default: "5"
+      save_baseline:
+        description: "Upload the metrics as a baseline artifact"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-llm.txt
+
+      # CPU torch first, from PyTorch's own index. requirements-llm.txt pins
+      # torch==2.7.1, and PEP 440 treats that as satisfied by 2.7.1+cpu, so the
+      # CPU build survives the next step instead of being replaced by the much
+      # larger default wheel. --index-url, not --extra-index-url: it applies to
+      # torch alone and does not mix indexes for anything else.
+      - name: Install CPU torch
+        run: pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-llm.txt
+
+      - name: Confirm the CPU build survived
+        run: python -c "import torch; print(torch.__version__); assert not torch.cuda.is_available()"
+
+      # all-MiniLM-L6-v2 is ~90 MB from HuggingFace. Cached on the model name,
+      # so changing EMBED_MODEL correctly misses the cache.
+      - name: Cache the embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-all-MiniLM-L6-v2-v1
+
+      # The same suite the push job runs, except the integration tests in
+      # test_rag_integration.py now execute instead of skipping. Those are the
+      # only tests in the repo that touch a real vector.
+      - name: Run the suite with the RAG stack present
+        working-directory: code/llmsite
+        env:
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
+        run: python manage.py test --verbosity 2
+
+      - name: Confirm the integration tests did not silently skip
+        working-directory: code/llmsite
+        env:
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
+        run: |
+          python - <<'PY'
+          import django, os
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "llmsite.settings")
+          django.setup()
+          from tutor.tests import test_rag_integration as t
+          assert t.HAS_RAG_STACK, "the RAG stack is missing — every real-vector test skipped"
+          print("integration tests active")
+          PY
+
+      # The measurement. Prints hit rate, MRR, rejection accuracy and score
+      # separation, broken down by query kind.
+      - name: Score retrieval quality
+        working-directory: code/llmsite
+        env:
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
+        run: |
+          python manage.py rag_eval \
+            --verbosity 2 \
+            --top-k "${{ inputs.top_k }}" \
+            --save-baseline rag-metrics.json \
+            --json rag-detail.json
+
+      - name: Upload the metrics
+        if: ${{ inputs.save_baseline }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rag-metrics
+          path: |
+            code/llmsite/rag-metrics.json
+            code/llmsite/rag-detail.json
+          if-no-files-found: error
