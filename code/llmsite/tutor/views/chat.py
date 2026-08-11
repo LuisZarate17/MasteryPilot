@@ -84,6 +84,25 @@ def _has_student_message(session) -> bool:
     )
 
 
+def _student_context(user):
+    """The (name, school, grade, classes) the tutor persona is built from.
+
+    Falls back to placeholders for users without a StudentProfile — staff
+    accounts and the superuser can open a session too.
+    """
+    name = user.get_full_name() or user.username
+    try:
+        profile = user.studentprofile
+        return name, profile.school, profile.grade, profile.classes
+    except StudentProfile.DoesNotExist:
+        return (
+            name,
+            "George Washington High School",
+            "Freshman",
+            "Algebra 2, History, English",
+        )
+
+
 def _load_messages_from_db(request):
     """Reconstruct the LLM messages list from DB for the current session."""
     session_id = request.session.get("session_id")
@@ -183,17 +202,7 @@ def api_new_session(request):
     session = Session.objects.create(owner=request.user, title=title)
     request.session['session_id'] = str(session.id)
 
-    # Student info
-    name = request.user.get_full_name() or request.user.username
-    try:
-        profile = request.user.studentprofile
-        school = profile.school
-        grade = profile.grade
-        classes = profile.classes
-    except Exception:
-        school = "George Washington High School"
-        grade = "Freshman"
-        classes = "Algebra 2, History, English"
+    name, school, grade, classes = _student_context(request.user)
 
     ensure_llm_initialized()
 
@@ -465,11 +474,11 @@ def api_session_init(request, session_id):
     except Session.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
-    name = request.user.get_full_name() or request.user.username
-    school = "George Washington High School"
-    grade = "Sophomore"
-    classes = "Algebra 2, History, AP Language/Composition"
-    
+    # Same persona source as api_new_session. This used to hard-code a school,
+    # grade and class list, so a session bootstrapped through this path told the
+    # tutor things about the student that were simply untrue.
+    name, school, grade, classes = _student_context(request.user)
+
     ensure_llm_initialized()
     if model is None or tokenizer is None:
         return JsonResponse({"ok": False, "error": "Model unavailable"}, status=503)

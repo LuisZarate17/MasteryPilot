@@ -1,0 +1,333 @@
+"""The consolidated LLM adapter.
+
+Phase 5 collapsed four near-identical adapter modules into one config-driven
+`languagemodel.py`, verified by AST comparison and import checks — nothing
+actually exercised the code. This covers the parts that can run without a GPU,
+which is most of the module: the spec table, dispatch, the pure text helpers,
+and the two Adapter methods where the per-family config takes effect.
+
+Generation itself is not covered here and cannot be. requirements-llm.txt is
+not installed and there is no GPU, so no model has ever been loaded on this
+machine — see the live-generation note in CLEANUP_PLAN.md.
+"""
+
+from types import SimpleNamespace
+import unittest.mock as mock
+
+from django.conf import settings
+from django.test import SimpleTestCase
+
+import languagemodel
+from languagemodel import (
+    MAX_CONTEXT_TOKENS,
+    SPECS,
+    Adapter,
+    ModelSpec,
+    clean_title,
+    effective_max_input_tokens,
+    get_adapter,
+    introduction_prompt,
+    strip_think_blocks,
+)
+
+
+class SpecTableTests(SimpleTestCase):
+    def test_the_spec_table_matches_the_settings_allowlist(self):
+        """settings duplicates these names on purpose, to avoid importing
+        transformers into every manage.py run. Nothing enforced that the two
+        stayed in step until now."""
+        self.assertEqual(set(SPECS), set(settings.SUPPORTED_LLM_MODULES))
+
+    def test_the_default_module_is_supported(self):
+        self.assertIn(settings.LLM_MODULE, SPECS)
+
+    def test_every_spec_is_named_after_its_key(self):
+        for key, spec in SPECS.items():
+            with self.subTest(model=key):
+                self.assertEqual(spec.name, key)
+
+    def test_every_spec_declares_a_checkpoint(self):
+        for key, spec in SPECS.items():
+            with self.subTest(model=key):
+                self.assertTrue(spec.default_model_id)
+
+    def test_specs_are_frozen(self):
+        with self.assertRaises(Exception):
+            SPECS["qwen"].temperature = 0.9
+
+    def test_qwen_handles_its_reasoning_output(self):
+        """Qwen3 emits <think> blocks unless told otherwise, and even then."""
+        spec = SPECS["qwen"]
+
+        self.assertTrue(spec.disable_thinking)
+        self.assertTrue(spec.strip_think_blocks)
+
+    def test_llama_carries_the_hand_written_template_and_a_stop_marker(self):
+        spec = SPECS["llama"]
+
+        self.assertIsNotNone(spec.chat_template)
+        self.assertEqual(spec.truncate_at, "<|")
+
+    def test_mistral_uses_the_tokenizer_defaults(self):
+        spec = SPECS["mistral"]
+
+        self.assertIsNone(spec.chat_template)
+        self.assertIsNone(spec.truncate_at)
+        self.assertFalse(spec.disable_thinking)
+        self.assertFalse(spec.strip_think_blocks)
+
+    def test_model_spec_defaults(self):
+        spec = ModelSpec(name="x", default_model_id="org/x")
+
+        self.assertEqual(spec.temperature, 0.4)
+        self.assertEqual(spec.max_new_tokens, 1024)
+        self.assertIsNone(spec.chat_template)
+
+
+class GetAdapterTests(SimpleTestCase):
+    def test_each_supported_name_dispatches_to_its_spec(self):
+        for key in SPECS:
+            with self.subTest(model=key):
+                self.assertEqual(get_adapter(key).spec, SPECS[key])
+
+    def test_the_name_is_normalised(self):
+        self.assertEqual(get_adapter("  QWEN  ").spec, SPECS["qwen"])
+
+    def test_an_unknown_name_is_rejected(self):
+        with self.assertRaises(ValueError) as ctx:
+            get_adapter("gpt-9")
+
+        self.assertIn("gpt-9", str(ctx.exception))
+
+    def test_empty_and_none_are_rejected_as_value_errors(self):
+        """Not TypeError — callers pass settings.LLM_MODULE straight through."""
+        for name in (None, "", "   "):
+            with self.subTest(name=repr(name)):
+                with self.assertRaises(ValueError):
+                    get_adapter(name)
+
+    def test_each_call_returns_a_fresh_adapter(self):
+        self.assertIsNot(get_adapter("qwen"), get_adapter("qwen"))
+
+
+class CleanTitleTests(SimpleTestCase):
+    def test_surrounding_whitespace_and_quotes_are_stripped(self):
+        self.assertEqual(clean_title('  "Algebra Basics" '), "Algebra Basics")
+
+    def test_declining_yields_an_empty_string(self):
+        """Callers leave the existing title alone on "" — so NONE must map to it."""
+        for raw in ("NONE", "none", " None ", '"NONE"'):
+            with self.subTest(raw=raw):
+                self.assertEqual(clean_title(raw), "")
+
+    def test_empty_input_is_handled_without_raising(self):
+        for raw in (None, "", "   "):
+            with self.subTest(raw=repr(raw)):
+                self.assertEqual(clean_title(raw), "")
+
+    def test_long_titles_are_truncated_to_forty_characters(self):
+        title = clean_title("x" * 100)
+
+        self.assertEqual(len(title), 40)
+
+    def test_truncation_does_not_leave_a_trailing_space(self):
+        raw = "a" * 39 + " tail"
+
+        self.assertEqual(clean_title(raw), "a" * 39)
+
+    def test_an_ordinary_title_passes_through(self):
+        self.assertEqual(clean_title("Fractions and Decimals"), "Fractions and Decimals")
+
+
+class StripThinkBlocksTests(SimpleTestCase):
+    def test_a_reasoning_block_is_removed(self):
+        self.assertEqual(strip_think_blocks("<think>reasoning</think>Answer here"), "Answer here")
+
+    def test_several_blocks_are_all_removed(self):
+        text = "<think>a</think>One <think>b</think>Two"
+
+        self.assertEqual(strip_think_blocks(text), "One Two")
+
+    def test_text_without_blocks_is_unchanged(self):
+        self.assertEqual(strip_think_blocks("Just an answer."), "Just an answer.")
+
+    def test_an_unclosed_block_is_left_alone(self):
+        """Better to show the tag than to swallow the whole reply."""
+        text = "<think>never closed"
+
+        self.assertEqual(strip_think_blocks(text), text)
+
+    def test_a_stray_closing_tag_terminates_the_loop(self):
+        text = "</think> leading close <think>"
+
+        self.assertEqual(strip_think_blocks(text), text.strip())
+
+    def test_the_result_is_stripped(self):
+        self.assertEqual(strip_think_blocks("  <think>x</think>  answer  "), "answer")
+
+
+class EffectiveMaxInputTokensTests(SimpleTestCase):
+    def test_a_smaller_tokenizer_limit_wins(self):
+        self.assertEqual(
+            effective_max_input_tokens(SimpleNamespace(model_max_length=512)), 512
+        )
+
+    def test_the_hard_cap_wins_over_a_huge_sentinel(self):
+        """Some HF tokenizers report int(1e30) here."""
+        self.assertEqual(
+            effective_max_input_tokens(SimpleNamespace(model_max_length=int(1e30))),
+            MAX_CONTEXT_TOKENS,
+        )
+
+    def test_a_missing_attribute_falls_back_to_the_cap(self):
+        self.assertEqual(effective_max_input_tokens(object()), MAX_CONTEXT_TOKENS)
+
+    def test_an_explicit_none_falls_back_to_the_cap(self):
+        self.assertEqual(
+            effective_max_input_tokens(SimpleNamespace(model_max_length=None)),
+            MAX_CONTEXT_TOKENS,
+        )
+
+    def test_a_limit_equal_to_the_cap_is_kept(self):
+        self.assertEqual(
+            effective_max_input_tokens(SimpleNamespace(model_max_length=MAX_CONTEXT_TOKENS)),
+            MAX_CONTEXT_TOKENS,
+        )
+
+
+class IntroductionPromptTests(SimpleTestCase):
+    def test_every_student_field_reaches_the_prompt(self):
+        prompt = introduction_prompt("Ada", "WSU", "11", "Algebra, CS")
+
+        for value in ("Ada", "WSU", "11", "Algebra, CS"):
+            self.assertIn(value, prompt)
+
+    def test_the_prompt_opens_with_the_bootstrap_marker(self):
+        """_is_bootstrap_user_message keys off this exact opening."""
+        from tutor.views.chat import _is_bootstrap_user_message
+
+        prompt = introduction_prompt("Ada", "WSU", "11", "Algebra")
+
+        self.assertTrue(prompt.startswith("Here is your student information"))
+        self.assertTrue(_is_bootstrap_user_message(prompt))
+
+
+class AdapterCleanTests(SimpleTestCase):
+    """_clean is where the per-family spec config actually takes effect."""
+
+    def test_qwen_strips_reasoning(self):
+        self.assertEqual(get_adapter("qwen")._clean("<think>x</think> Hi"), "Hi")
+
+    def test_llama_truncates_at_a_fabricated_turn(self):
+        """The hand-written template lets the model roll on into a fake turn."""
+        self.assertEqual(get_adapter("llama")._clean("Hi<|user|>junk"), "Hi")
+
+    def test_mistral_leaves_both_alone(self):
+        text = "<think>kept</think> and <| kept"
+
+        self.assertEqual(get_adapter("mistral")._clean(text), text.strip())
+
+    def test_output_is_always_stripped(self):
+        for key in SPECS:
+            with self.subTest(model=key):
+                self.assertEqual(get_adapter(key)._clean("  padded  "), "padded")
+
+
+class AdapterTemplateTests(SimpleTestCase):
+    """_apply_template forwards only the kwargs a family actually needs."""
+
+    class RecordingTokenizer:
+        def __init__(self):
+            self.kwargs = None
+
+        def apply_chat_template(self, messages, **kwargs):
+            self.kwargs = kwargs
+            return "PROMPT"
+
+    def apply(self, model_key):
+        tokenizer = self.RecordingTokenizer()
+        get_adapter(model_key)._apply_template(tokenizer, [{"role": "user", "content": "hi"}])
+        return tokenizer.kwargs
+
+    def test_qwen_disables_thinking_and_sends_no_template(self):
+        kwargs = self.apply("qwen")
+
+        self.assertIs(kwargs["enable_thinking"], False)
+        self.assertNotIn("chat_template", kwargs)
+
+    def test_llama_sends_its_template_and_no_thinking_flag(self):
+        kwargs = self.apply("llama")
+
+        self.assertEqual(kwargs["chat_template"], SPECS["llama"].chat_template)
+        self.assertNotIn("enable_thinking", kwargs)
+
+    def test_mistral_sends_neither(self):
+        kwargs = self.apply("mistral")
+
+        self.assertNotIn("chat_template", kwargs)
+        self.assertNotIn("enable_thinking", kwargs)
+
+    def test_generation_prompt_is_always_requested(self):
+        for key in SPECS:
+            with self.subTest(model=key):
+                kwargs = self.apply(key)
+                self.assertIs(kwargs["add_generation_prompt"], True)
+                self.assertIs(kwargs["tokenize"], False)
+
+
+class DeriveSessionTitleTests(SimpleTestCase):
+    """Everything but _generate is pure, so one patch covers all paths."""
+
+    def test_a_title_is_cleaned_before_it_is_returned(self):
+        with mock.patch.object(Adapter, "_generate", return_value='  "Fractions"  '):
+            title = get_adapter("qwen").derive_session_title(None, None, "How do fractions work?")
+
+        self.assertEqual(title, "Fractions")
+
+    def test_an_empty_first_message_short_circuits(self):
+        """Returns before any import, so this needs no patch at all."""
+        self.assertEqual(get_adapter("qwen").derive_session_title(None, None, "   "), "")
+
+    def test_a_declined_title_becomes_empty(self):
+        with mock.patch.object(Adapter, "_generate", return_value="NONE"):
+            title = get_adapter("qwen").derive_session_title(None, None, "hi")
+
+        self.assertEqual(title, "")
+
+    def test_a_generation_failure_is_swallowed(self):
+        """Titling is cosmetic; it must never fail the request that triggered it."""
+        with mock.patch.object(Adapter, "_generate", side_effect=RuntimeError("no GPU")):
+            title = get_adapter("qwen").derive_session_title(None, None, "hi")
+
+        self.assertEqual(title, "")
+
+
+class CurriculumPathTests(SimpleTestCase):
+    def test_the_adapter_indexes_the_directory_uploads_are_written_to(self):
+        """Regression: these were two different directories.
+
+        Teacher uploads land in settings.CURRICULUM_ROOT, but the adapter used
+        to index a module-level path one level deeper that nothing ever wrote
+        to — so uploaded curriculum was never retrievable.
+        """
+        seen = []
+        with mock.patch.dict(
+            "sys.modules",
+            {"rag": SimpleNamespace(ensure_curriculum_loaded=seen.append)},
+        ):
+            get_adapter("qwen").load_curriculum()
+
+        self.assertEqual(seen, [str(settings.CURRICULUM_ROOT)])
+
+    def test_no_stale_module_level_curriculum_constant_remains(self):
+        self.assertFalse(hasattr(languagemodel, "CURRICULUM_PATH"))
+
+
+class LazyImportTests(SimpleTestCase):
+    def test_importing_the_adapter_does_not_pull_in_the_llm_stack(self):
+        """requirements.txt alone must be enough to import this module."""
+        import sys
+
+        for heavy in ("torch", "transformers", "sentence_transformers", "faiss"):
+            with self.subTest(module=heavy):
+                self.assertNotIn(heavy, sys.modules)
