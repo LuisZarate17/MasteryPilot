@@ -38,13 +38,13 @@ class RealIndexTests(SimpleTestCase):
     """The evaluation corpus, embedded and searched for real."""
 
     def test_the_corpus_indexes_to_a_nonempty_index(self):
-        with isolated_index(EVAL_CORPUS) as rag:
-            self.assertGreater(len(rag.documents), 0)
-            self.assertEqual(rag.get_index().ntotal, len(rag.documents))
+        with isolated_index(EVAL_CORPUS) as index:
+            self.assertGreater(len(index.documents), 0)
+            self.assertEqual(index.get_index().ntotal, len(index.documents))
 
     def test_a_direct_question_retrieves_its_own_document(self):
-        with isolated_index(EVAL_CORPUS) as rag:
-            hits = rag.retrieve("how do plants convert sunlight into food")
+        with isolated_index(EVAL_CORPUS) as index:
+            hits = index.retrieve("how do plants convert sunlight into food")
 
             self.assertTrue(hits, "a clearly answerable question returned nothing")
             self.assertIn("photosynthesis.txt", {h["source"] for h in hits})
@@ -56,10 +56,10 @@ class RealIndexTests(SimpleTestCase):
             ("what is the bottom number of a fraction called", "fractions.txt"),
             ("what do mitochondria do", "cell_structure.txt"),
         ]
-        with isolated_index(EVAL_CORPUS) as rag:
+        with isolated_index(EVAL_CORPUS) as index:
             for query, expected in cases:
                 with self.subTest(query=query):
-                    hits = rag.retrieve(query)
+                    hits = index.retrieve(query)
 
                     self.assertTrue(hits, f"{query!r} returned nothing")
                     self.assertEqual(
@@ -69,9 +69,9 @@ class RealIndexTests(SimpleTestCase):
                     )
 
     def test_every_indexed_chunk_carries_its_source_and_position(self):
-        with isolated_index(EVAL_CORPUS) as rag:
+        with isolated_index(EVAL_CORPUS) as index:
             corpus_files = set(os.listdir(EVAL_CORPUS))
-            for doc in rag.documents:
+            for doc in index.documents:
                 self.assertIn(doc["source"].split("/")[0], corpus_files)
                 self.assertIsInstance(doc["chunk_idx"], int)
 
@@ -89,16 +89,16 @@ class PersistenceRoundTripTests(SimpleTestCase):
     QUERY = "what is the discriminant"
 
     def test_a_saved_index_reloads_with_identical_results(self):
-        with isolated_index(EVAL_CORPUS) as rag:
-            before = rag.retrieve(self.QUERY)
+        with isolated_index(EVAL_CORPUS) as index:
+            before = index.retrieve(self.QUERY)
             self.assertTrue(before, "nothing to compare — the query returned no hits")
 
-            rag.save_index()
-            rag.documents = []
-            rag.index = None
-            rag.load_index()
+            index.save_index()
+            index.documents = []
+            index.index = None
+            index.load_index()
 
-            after = rag.retrieve(self.QUERY)
+            after = index.retrieve(self.QUERY)
 
         self.assertEqual(
             [(h["source"], h["chunk_idx"]) for h in before],
@@ -106,13 +106,13 @@ class PersistenceRoundTripTests(SimpleTestCase):
         )
 
     def test_the_reloaded_index_and_metadata_stay_the_same_length(self):
-        with isolated_index(EVAL_CORPUS) as rag:
-            expected = len(rag.documents)
+        with isolated_index(EVAL_CORPUS) as index:
+            expected = len(index.documents)
 
-            rag.save_index()
-            rag.documents = []
-            rag.index = None
-            rag.load_index()
+            index.save_index()
+            index.documents = []
+            index.index = None
+            index.load_index()
 
-            self.assertEqual(len(rag.documents), expected)
-            self.assertEqual(rag.get_index().ntotal, expected)
+            self.assertEqual(len(index.documents), expected)
+            self.assertEqual(index.get_index().ntotal, expected)

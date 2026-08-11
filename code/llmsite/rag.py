@@ -1,7 +1,7 @@
 """Curriculum retrieval: chunking, embedding, FAISS index, search.
 
 sentence-transformers, faiss, numpy and PyPDF2 are imported *inside* the
-functions that need them, mirroring languagemodel.py. They live in
+methods that need them, mirroring languagemodel.py. They live in
 requirements-llm.txt, which is optional and is not installed for the test
 suite, so importing this module must not drag them in — the embedder alone
 would download and load a model at import time.
@@ -9,6 +9,21 @@ would download and load a model at import time.
 Everything that does not embed or search — chunking, staleness checks, source
 labelling, message formatting, the loader dispatch — is therefore importable
 and testable on the core install.
+
+Structure
+---------
+``RagIndex`` owns everything stateful: the loaded documents, the FAISS index,
+the embedder, and where those are persisted. ``default_index`` is the single
+instance the application uses, and the module-level functions are thin wrappers
+around it so existing callers (languagemodel.py) need no changes.
+
+The reason for the class is that one corpus per process is a ceiling. Serving a
+second curriculum — a different district, a different teacher — is now an
+instantiation rather than a rewrite. Nothing in the codebase asks for that
+today, so nothing here builds it; this only removes the obstacle.
+
+Pure functions stay at module level, because they hold no state and belong to
+no particular index: ``chunk_text``, ``_rel_source``, ``build_rag_system_message``.
 """
 
 import os
@@ -23,48 +38,20 @@ TOP_K         = 5     # candidates retrieved before threshold filtering
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
 IVF_THRESHOLD = 1000  # switch to approximate IVF index above this many chunks
 
-# ── Persistence paths ─────────────────────────────────────────────────────────
+# ── Embedding model ───────────────────────────────────────────────────────────
+EMBED_MODEL = "all-MiniLM-L6-v2"
+dimension   = 384
+
+# ── Default persistence paths ─────────────────────────────────────────────────
+# These configure the default instance. A non-default RagIndex derives its own
+# paths from its curriculum directory.
 _BASE      = os.path.dirname(os.path.abspath(__file__))
 INDEX_PATH = os.getenv("RAG_INDEX_PATH", os.path.join(_BASE, "curriculum.faiss"))
 DOCS_PATH  = INDEX_PATH.replace(".faiss", "_docs.pkl")
 
-# ── Embedding model + FAISS index ─────────────────────────────────────────────
-EMBED_MODEL = "all-MiniLM-L6-v2"
-dimension   = 384
-documents   = []   # list of {"text": str, "source": str, "chunk_idx": int}
-
-# Built on first use rather than at import — see the module docstring.
-embedder = None
-index    = None
-
-
-def get_embedder():
-    """The sentence-transformers model, loaded once per process."""
-    global embedder
-    if embedder is None:
-        from sentence_transformers import SentenceTransformer
-
-        embedder = SentenceTransformer(EMBED_MODEL)
-    return embedder
-
-
-def get_index():
-    """The FAISS index, created once per process."""
-    global index
-    if index is None:
-        import faiss
-
-        # Inner product == cosine once vectors are L2-normalised.
-        index = faiss.IndexFlatIP(dimension)
-    return index
-
-
-# Guard against loading the curriculum more than once per process
-_curriculum_loaded = False
-
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Chunking
+# Chunking — pure, stateless, shared by every index
 # ─────────────────────────────────────────────────────────────────────────────
 
 def chunk_text(text, source):
@@ -110,127 +97,12 @@ def chunk_text(text, source):
     return chunks
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Index management
-# ─────────────────────────────────────────────────────────────────────────────
-
-def add_documents(chunk_dicts):
-    """Embed chunks, L2-normalise, and add to FAISS index."""
-    global documents
-    import faiss
-
-    if not chunk_dicts:
-        return
-    texts = [c["text"] for c in chunk_dicts]
-    vecs = get_embedder().encode(texts, convert_to_numpy=True).astype("float32")
-    faiss.normalize_L2(vecs)
-    get_index().add(vecs)
-    documents.extend(chunk_dicts)
-
-
-def save_index():
-    """Persist FAISS index and document metadata to disk."""
-    import faiss
-
-    idx = get_index()
-    faiss.write_index(idx, INDEX_PATH)
-    with open(DOCS_PATH, "wb") as f:
-        pickle.dump(documents, f)
-    print(f"[RAG] Index saved: {idx.ntotal} vectors → {INDEX_PATH}")
-
-
-def load_index():
-    """Load FAISS index and document metadata from disk."""
-    global index, documents
-    import faiss
-
-    index = faiss.read_index(INDEX_PATH)
-    with open(DOCS_PATH, "rb") as f:
-        documents = pickle.load(f)
-    print(f"[RAG] Index loaded from disk: {index.ntotal} vectors")
-
-
-def is_index_stale(curriculum_path):
-    """Return True if the saved index is absent or older than any curriculum file."""
-    if not os.path.exists(INDEX_PATH) or not os.path.exists(DOCS_PATH):
-        return True
-    index_mtime = os.path.getmtime(INDEX_PATH)
-    for root, _dirs, files in os.walk(curriculum_path):
-        for fname in files:
-            if os.path.getmtime(os.path.join(root, fname)) > index_mtime:
-                return True
-    return False
-
-
-def _maybe_upgrade_to_ivf():
-    """If corpus exceeds IVF_THRESHOLD, replace flat index with approximate IVF."""
-    global index
-    import faiss
-    import numpy as np
-
-    index = get_index()
-    n = index.ntotal
-    if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
-        return
-    print(f"[RAG] {n} vectors — upgrading to approximate IVF index...")
-    all_vecs = np.vstack([index.reconstruct(i) for i in range(n)]).astype("float32")
-    nlist = min(100, n // 10)
-    quantiser = faiss.IndexFlatIP(dimension)
-    ivf = faiss.IndexIVFFlat(quantiser, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
-    ivf.train(all_vecs)
-    ivf.add(all_vecs)
-    ivf.nprobe = 10
-    index = ivf
-    print(f"[RAG] IVF index ready (nlist={nlist}, nprobe=10).")
-
-
-def ensure_curriculum_loaded(curriculum_path):
-    """
-    Load curriculum into the index exactly once per process.
-    Uses cached index file when fresh; rebuilds and saves when stale or absent.
-    """
-    global _curriculum_loaded
-    if _curriculum_loaded:
-        return
-    _curriculum_loaded = True   # set early to prevent re-entry on error
-    if not os.path.exists(curriculum_path):
-        print("[RAG] No curriculum folder found. Skipping.")
-        return
-    if is_index_stale(curriculum_path):
-        print(f"[RAG] Index stale or absent — rebuilding from {curriculum_path} ...")
-        load_curriculum_folder(curriculum_path)
-        _maybe_upgrade_to_ivf()
-        save_index()
-        print(f"[RAG] Curriculum indexed: {get_index().ntotal} chunks.")
-    else:
-        load_index()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Retrieval
-# ─────────────────────────────────────────────────────────────────────────────
-
-def retrieve(query, top_k=TOP_K, min_score=MIN_SCORE):
-    """
-    Return chunk dicts relevant to *query*.
-    Chunks with cosine similarity < min_score are dropped silently.
-    Returns an empty list when nothing relevant exists.
-    """
-    if not documents:
-        return []
-    import faiss
-
-    query_vec = get_embedder().encode([query], convert_to_numpy=True).astype("float32")
-    faiss.normalize_L2(query_vec)
-    k = min(top_k, len(documents))
-    scores, indices = get_index().search(query_vec, k)
-    results = []
-    for score, i in zip(scores[0], indices[0]):
-        if i < 0:
-            continue
-        if float(score) >= min_score:
-            results.append(documents[i])
-    return results
+def _rel_source(file_path, curriculum_root):
+    """Return file_path relative to curriculum_root as the source label."""
+    try:
+        return os.path.relpath(file_path, curriculum_root)
+    except ValueError:
+        return os.path.basename(file_path)
 
 
 def build_rag_system_message(chunks):
@@ -250,118 +122,332 @@ def build_rag_system_message(chunks):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# File loaders
+# The index
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _rel_source(file_path, curriculum_root):
-    """Return file_path relative to curriculum_root as the source label."""
-    try:
-        return os.path.relpath(file_path, curriculum_root)
-    except ValueError:
-        return os.path.basename(file_path)
+class RagIndex:
+    """One curriculum corpus: its chunks, its vectors, and where they persist."""
+
+    def __init__(self, curriculum_path=None, index_path=None, docs_path=None):
+        self.curriculum_path = curriculum_path
+
+        if index_path is None:
+            # A derived path must sit *beside* the corpus, never inside it:
+            # is_index_stale walks the corpus tree, so an index stored within
+            # it would be newer than itself and stale on every single check.
+            index_path = (
+                INDEX_PATH if curriculum_path is None
+                else os.path.normpath(curriculum_path) + ".faiss"
+            )
+        self.index_path = index_path
+        self.docs_path = docs_path or index_path.replace(".faiss", "_docs.pkl")
+
+        self.documents = []   # list of {"text": str, "source": str, "chunk_idx": int}
+
+        # Built on first use rather than at construction — see the module docstring.
+        self.embedder = None
+        self.index = None
+
+        # Guard against loading the curriculum more than once per process
+        self._curriculum_loaded = False
+
+    # ── Lazily built singletons ──────────────────────────────────────────────
+
+    def get_embedder(self):
+        """The sentence-transformers model, loaded once per index."""
+        if self.embedder is None:
+            from sentence_transformers import SentenceTransformer
+
+            self.embedder = SentenceTransformer(EMBED_MODEL)
+        return self.embedder
+
+    def get_index(self):
+        """The FAISS index, created once per index."""
+        if self.index is None:
+            import faiss
+
+            # Inner product == cosine once vectors are L2-normalised.
+            self.index = faiss.IndexFlatIP(dimension)
+        return self.index
+
+    # ── Index management ─────────────────────────────────────────────────────
+
+    def add_documents(self, chunk_dicts):
+        """Embed chunks, L2-normalise, and add to FAISS index."""
+        import faiss
+
+        if not chunk_dicts:
+            return
+        texts = [c["text"] for c in chunk_dicts]
+        vecs = self.get_embedder().encode(texts, convert_to_numpy=True).astype("float32")
+        faiss.normalize_L2(vecs)
+        self.get_index().add(vecs)
+        self.documents.extend(chunk_dicts)
+
+    def save_index(self):
+        """Persist FAISS index and document metadata to disk."""
+        import faiss
+
+        idx = self.get_index()
+        faiss.write_index(idx, self.index_path)
+        with open(self.docs_path, "wb") as f:
+            pickle.dump(self.documents, f)
+        print(f"[RAG] Index saved: {idx.ntotal} vectors → {self.index_path}")
+
+    def load_index(self):
+        """Load FAISS index and document metadata from disk."""
+        import faiss
+
+        self.index = faiss.read_index(self.index_path)
+        with open(self.docs_path, "rb") as f:
+            self.documents = pickle.load(f)
+        print(f"[RAG] Index loaded from disk: {self.index.ntotal} vectors")
+
+    def is_index_stale(self, curriculum_path):
+        """Return True if the saved index is absent or older than any curriculum file."""
+        if not os.path.exists(self.index_path) or not os.path.exists(self.docs_path):
+            return True
+        index_mtime = os.path.getmtime(self.index_path)
+        for root, _dirs, files in os.walk(curriculum_path):
+            for fname in files:
+                if os.path.getmtime(os.path.join(root, fname)) > index_mtime:
+                    return True
+        return False
+
+    def _maybe_upgrade_to_ivf(self):
+        """If corpus exceeds IVF_THRESHOLD, replace flat index with approximate IVF."""
+        import faiss
+        import numpy as np
+
+        index = self.get_index()
+        n = index.ntotal
+        if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
+            return
+        print(f"[RAG] {n} vectors — upgrading to approximate IVF index...")
+        all_vecs = np.vstack([index.reconstruct(i) for i in range(n)]).astype("float32")
+        nlist = min(100, n // 10)
+        quantiser = faiss.IndexFlatIP(dimension)
+        ivf = faiss.IndexIVFFlat(quantiser, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
+        ivf.train(all_vecs)
+        ivf.add(all_vecs)
+        ivf.nprobe = 10
+        self.index = ivf
+        print(f"[RAG] IVF index ready (nlist={nlist}, nprobe=10).")
+
+    def ensure_curriculum_loaded(self, curriculum_path=None):
+        """
+        Load curriculum into the index exactly once per process.
+        Uses cached index file when fresh; rebuilds and saves when stale or absent.
+        """
+        curriculum_path = curriculum_path or self.curriculum_path
+        if self._curriculum_loaded:
+            return
+        self._curriculum_loaded = True   # set early to prevent re-entry on error
+        self.curriculum_path = curriculum_path
+        if not os.path.exists(curriculum_path):
+            print("[RAG] No curriculum folder found. Skipping.")
+            return
+        if self.is_index_stale(curriculum_path):
+            print(f"[RAG] Index stale or absent — rebuilding from {curriculum_path} ...")
+            self.load_curriculum_folder(curriculum_path)
+            self._maybe_upgrade_to_ivf()
+            self.save_index()
+            print(f"[RAG] Curriculum indexed: {self.get_index().ntotal} chunks.")
+        else:
+            self.load_index()
+
+    # ── Retrieval ────────────────────────────────────────────────────────────
+
+    def retrieve(self, query, top_k=TOP_K, min_score=MIN_SCORE):
+        """
+        Return chunk dicts relevant to *query*.
+        Chunks with cosine similarity < min_score are dropped silently.
+        Returns an empty list when nothing relevant exists.
+        """
+        if not self.documents:
+            return []
+        import faiss
+
+        query_vec = self.get_embedder().encode([query], convert_to_numpy=True).astype("float32")
+        faiss.normalize_L2(query_vec)
+        k = min(top_k, len(self.documents))
+        scores, indices = self.get_index().search(query_vec, k)
+        results = []
+        for score, i in zip(scores[0], indices[0]):
+            if i < 0:
+                continue
+            if float(score) >= min_score:
+                results.append(self.documents[i])
+        return results
+
+    # ── File loaders ─────────────────────────────────────────────────────────
+
+    def load_txt_files(self, folder_path, curriculum_root=None):
+        root = curriculum_root or folder_path
+        for filename in os.listdir(folder_path):
+            if not filename.endswith(".txt"):
+                continue
+            filepath = os.path.join(folder_path, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(filepath, "r", encoding="latin-1") as f:
+                    content = f.read()
+            self.add_documents(chunk_text(content, _rel_source(filepath, root)))
+
+    def load_pdf_files(self, folder_path, curriculum_root=None):
+        from PyPDF2 import PdfReader
+
+        root = curriculum_root or folder_path
+        for filename in os.listdir(folder_path):
+            if not filename.endswith(".pdf"):
+                continue
+            filepath = os.path.join(folder_path, filename)
+            reader = PdfReader(filepath)
+            text = "".join(page.extract_text() or "" for page in reader.pages)
+            self.add_documents(chunk_text(text, _rel_source(filepath, root)))
+
+    def load_md_files(self, folder_path, curriculum_root=None):
+        root = curriculum_root or folder_path
+        for filename in os.listdir(folder_path):
+            if not filename.endswith(".md"):
+                continue
+            filepath = os.path.join(folder_path, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(filepath, "r", encoding="latin-1") as f:
+                    content = f.read()
+            # Strip common markdown syntax before chunking
+            content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+            content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+            content = re.sub(r'`{1,3}[\s\S]*?`{1,3}', '', content)
+            content = re.sub(r'[*_]{1,2}([^*_\n]+)[*_]{1,2}', r'\1', content)
+            content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+            self.add_documents(chunk_text(content, _rel_source(filepath, root)))
+
+    def load_docx_files(self, folder_path, curriculum_root=None):
+        try:
+            import docx as _docx
+        except ImportError:
+            return
+        root = curriculum_root or folder_path
+        for filename in os.listdir(folder_path):
+            if not filename.endswith(".docx"):
+                continue
+            filepath = os.path.join(folder_path, filename)
+            doc = _docx.Document(filepath)
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            self.add_documents(chunk_text(text, _rel_source(filepath, root)))
+
+    def load_json_files(self, folder_path, curriculum_root=None):
+        root = curriculum_root or folder_path
+        for filename in os.listdir(folder_path):
+            if not filename.endswith(".json"):
+                continue
+            filepath = os.path.join(folder_path, filename)
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if isinstance(item, dict):
+                    title   = item.get("title", filename)
+                    content = item.get("content", "")
+                    if content:
+                        source = _rel_source(filepath, root) + f"/{title}"
+                        self.add_documents(chunk_text(content, source))
+
+    def load_all_files(self, folder_path, curriculum_root=None):
+        """Load all supported file types from a single folder."""
+        self.load_txt_files(folder_path, curriculum_root)
+        self.load_pdf_files(folder_path, curriculum_root)
+        self.load_md_files(folder_path, curriculum_root)
+        self.load_docx_files(folder_path, curriculum_root)
+        self.load_json_files(folder_path, curriculum_root)
+
+    def load_curriculum_folder(self, curriculum_path):
+        """Load files from the curriculum root and every subdirectory below it.
+
+        This walks the full tree to match is_index_stale, which uses os.walk. It
+        used to descend only one level, so a file nested two deep made the index
+        permanently stale — it was newer than the index, but indexing never picked
+        it up — and every startup rebuilt the whole corpus.
+        """
+        for root, _dirs, _files in os.walk(curriculum_path):
+            self.load_all_files(root, curriculum_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The default instance, and the module-level API that delegates to it
+# ─────────────────────────────────────────────────────────────────────────────
+
+default_index = RagIndex()
+
+
+def get_embedder():
+    return default_index.get_embedder()
+
+
+def get_index():
+    return default_index.get_index()
+
+
+def add_documents(chunk_dicts):
+    return default_index.add_documents(chunk_dicts)
+
+
+def save_index():
+    return default_index.save_index()
+
+
+def load_index():
+    return default_index.load_index()
+
+
+def is_index_stale(curriculum_path):
+    return default_index.is_index_stale(curriculum_path)
+
+
+def _maybe_upgrade_to_ivf():
+    return default_index._maybe_upgrade_to_ivf()
+
+
+def ensure_curriculum_loaded(curriculum_path=None):
+    return default_index.ensure_curriculum_loaded(curriculum_path)
+
+
+def retrieve(query, top_k=TOP_K, min_score=MIN_SCORE):
+    return default_index.retrieve(query, top_k=top_k, min_score=min_score)
 
 
 def load_txt_files(folder_path, curriculum_root=None):
-    root = curriculum_root or folder_path
-    for filename in os.listdir(folder_path):
-        if not filename.endswith(".txt"):
-            continue
-        filepath = os.path.join(folder_path, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(filepath, "r", encoding="latin-1") as f:
-                content = f.read()
-        add_documents(chunk_text(content, _rel_source(filepath, root)))
+    return default_index.load_txt_files(folder_path, curriculum_root)
 
 
 def load_pdf_files(folder_path, curriculum_root=None):
-    from PyPDF2 import PdfReader
-
-    root = curriculum_root or folder_path
-    for filename in os.listdir(folder_path):
-        if not filename.endswith(".pdf"):
-            continue
-        filepath = os.path.join(folder_path, filename)
-        reader = PdfReader(filepath)
-        text = "".join(page.extract_text() or "" for page in reader.pages)
-        add_documents(chunk_text(text, _rel_source(filepath, root)))
+    return default_index.load_pdf_files(folder_path, curriculum_root)
 
 
 def load_md_files(folder_path, curriculum_root=None):
-    root = curriculum_root or folder_path
-    for filename in os.listdir(folder_path):
-        if not filename.endswith(".md"):
-            continue
-        filepath = os.path.join(folder_path, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                content = f.read()
-        except UnicodeDecodeError:
-            with open(filepath, "r", encoding="latin-1") as f:
-                content = f.read()
-        # Strip common markdown syntax before chunking
-        content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
-        content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-        content = re.sub(r'`{1,3}[\s\S]*?`{1,3}', '', content)
-        content = re.sub(r'[*_]{1,2}([^*_\n]+)[*_]{1,2}', r'\1', content)
-        content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
-        add_documents(chunk_text(content, _rel_source(filepath, root)))
+    return default_index.load_md_files(folder_path, curriculum_root)
 
 
 def load_docx_files(folder_path, curriculum_root=None):
-    try:
-        import docx as _docx
-    except ImportError:
-        return
-    root = curriculum_root or folder_path
-    for filename in os.listdir(folder_path):
-        if not filename.endswith(".docx"):
-            continue
-        filepath = os.path.join(folder_path, filename)
-        doc = _docx.Document(filepath)
-        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-        add_documents(chunk_text(text, _rel_source(filepath, root)))
+    return default_index.load_docx_files(folder_path, curriculum_root)
 
 
 def load_json_files(folder_path, curriculum_root=None):
-    root = curriculum_root or folder_path
-    for filename in os.listdir(folder_path):
-        if not filename.endswith(".json"):
-            continue
-        filepath = os.path.join(folder_path, filename)
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            continue
-        items = data if isinstance(data, list) else [data]
-        for item in items:
-            if isinstance(item, dict):
-                title   = item.get("title", filename)
-                content = item.get("content", "")
-                if content:
-                    source = _rel_source(filepath, root) + f"/{title}"
-                    add_documents(chunk_text(content, source))
+    return default_index.load_json_files(folder_path, curriculum_root)
 
 
 def load_all_files(folder_path, curriculum_root=None):
-    """Load all supported file types from a single folder."""
-    load_txt_files(folder_path, curriculum_root)
-    load_pdf_files(folder_path, curriculum_root)
-    load_md_files(folder_path, curriculum_root)
-    load_docx_files(folder_path, curriculum_root)
-    load_json_files(folder_path, curriculum_root)
+    return default_index.load_all_files(folder_path, curriculum_root)
 
 
 def load_curriculum_folder(curriculum_path):
-    """Load files from the curriculum root and every subdirectory below it.
-
-    This walks the full tree to match is_index_stale, which uses os.walk. It
-    used to descend only one level, so a file nested two deep made the index
-    permanently stale — it was newer than the index, but indexing never picked
-    it up — and every startup rebuilt the whole corpus.
-    """
-    for root, _dirs, _files in os.walk(curriculum_path):
-        load_all_files(root, curriculum_path)
+    return default_index.load_curriculum_folder(curriculum_path)

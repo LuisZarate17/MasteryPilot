@@ -104,13 +104,12 @@ class GoldenMarkdownTests(SimpleTestCase):
     """
 
     def current(self):
+        # A local index rather than the default one: this touches no shared
+        # state at all, so it cannot disturb whatever else is running.
         collected = []
-        original = rag.add_documents
-        rag.add_documents = collected.extend
-        try:
-            rag.load_md_files(MARKDOWN_DIR, MARKDOWN_DIR)
-        finally:
-            rag.add_documents = original
+        index = rag.RagIndex()
+        index.add_documents = collected.extend
+        index.load_md_files(MARKDOWN_DIR, MARKDOWN_DIR)
         # os.listdir order is not guaranteed across platforms.
         return sorted(collected, key=lambda chunk: (chunk["source"], chunk["chunk_idx"]))
 

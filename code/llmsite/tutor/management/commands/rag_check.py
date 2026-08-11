@@ -64,7 +64,7 @@ class Command(BaseCommand):
                 self._dump(documents, options["full"])
                 return
 
-            top_k = options["top_k"] or indexed.TOP_K
+            top_k = options["top_k"] or rag.TOP_K
             for query in options["query"]:
                 self._run(indexed, query, top_k, options["full"])
 
@@ -95,6 +95,8 @@ class Command(BaseCommand):
             self.stdout.write(f"  {self._body(doc['text'], full)}\n")
 
     def _run(self, indexed, query, top_k, full):
+        import rag
+
         self.stdout.write("=" * 68)
         self.stdout.write(f"Query: {query}")
         self.stdout.write("=" * 68)
@@ -103,7 +105,7 @@ class Command(BaseCommand):
         if not hits:
             self.stdout.write(
                 self.style.WARNING(
-                    f"No chunks cleared the score floor (MIN_SCORE={indexed.MIN_SCORE}). "
+                    f"No chunks cleared the score floor (MIN_SCORE={rag.MIN_SCORE}). "
                     "For an off-topic query that is the correct answer."
                 )
             )

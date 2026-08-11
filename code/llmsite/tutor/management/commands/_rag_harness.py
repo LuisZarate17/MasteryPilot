@@ -45,39 +45,48 @@ def require_stack():
         ) from exc
 
 
+# The embedder is expensive to construct and stateless across corpora, so one
+# is built per process and shared by every throwaway index. Without this, a
+# chunk-size sweep would reload the model on every iteration.
+_SHARED_EMBEDDER = None
+
+
+def _shared_embedder(rag):
+    global _SHARED_EMBEDDER
+    if _SHARED_EMBEDDER is None:
+        _SHARED_EMBEDDER = rag.RagIndex().get_embedder()
+    return _SHARED_EMBEDDER
+
+
 @contextlib.contextmanager
 def isolated_index(corpus_dir, chunk_size=None, chunk_overlap=None):
     """Build a throwaway index over *corpus_dir*, leaving the real one untouched.
 
-    Every piece of module state rag owns is saved and restored, so running this
-    inside a live process cannot corrupt the served index. The embedder is
-    deliberately *not* reset: it is expensive to construct and is stateless
-    across corpora, so repeated calls in one process reuse it.
+    Yields a RagIndex of its own, so the index the application serves is never
+    touched — running this inside a live process cannot corrupt it. Only the
+    chunking constants are module-level, and those are saved and restored.
 
-    This function is the single seam that knows how rag stores its state. When
-    that state moves onto a class, only this needs rewriting.
+    Tunables (CHUNK_SIZE, TOP_K, MIN_SCORE) stay on the rag module; corpus
+    state (documents, index, embedder, paths) lives on the yielded instance.
     """
     import rag
 
-    owned = ("documents", "index", "_curriculum_loaded", "INDEX_PATH", "DOCS_PATH",
-             "CHUNK_SIZE", "CHUNK_OVERLAP")
-    saved = {name: getattr(rag, name) for name in owned}
+    saved = {name: getattr(rag, name) for name in ("CHUNK_SIZE", "CHUNK_OVERLAP")}
     tmp = tempfile.mkdtemp(prefix="rag-eval-")
     try:
-        rag.documents = []
-        rag.index = None
-        rag._curriculum_loaded = False
-        # Set explicitly rather than derived, so this does not depend on how
-        # the sidecar path is computed.
-        rag.INDEX_PATH = os.path.join(tmp, "eval.faiss")
-        rag.DOCS_PATH = os.path.join(tmp, "eval_docs.json")
         if chunk_size:
             rag.CHUNK_SIZE = chunk_size
         if chunk_overlap is not None:
             rag.CHUNK_OVERLAP = chunk_overlap
 
-        rag.load_curriculum_folder(corpus_dir)
-        yield rag
+        index = rag.RagIndex(
+            curriculum_path=corpus_dir,
+            index_path=os.path.join(tmp, "eval.faiss"),
+            docs_path=os.path.join(tmp, "eval_docs.pkl"),
+        )
+        index.embedder = _shared_embedder(rag)
+        index.load_curriculum_folder(corpus_dir)
+        yield index
     finally:
         for name, value in saved.items():
             setattr(rag, name, value)

@@ -19,20 +19,22 @@ import rag
 
 
 class RagTestCase(SimpleTestCase):
-    """rag keeps process-global state; every test starts from a clean slate."""
+    """rag state lives on a default RagIndex; every test gets a fresh one.
 
-    STATE = ("documents", "_curriculum_loaded", "index", "embedder", "INDEX_PATH", "DOCS_PATH")
+    Swapping the whole instance is why this is four lines rather than the
+    six-name save/restore it replaced: paths, documents, embedder and index all
+    travel together, so there is nothing left to forget.
+
+    The module-level functions look ``default_index`` up at call time, so
+    rebinding it here redirects them without touching any caller.
+    """
 
     def setUp(self):
-        self._saved = {name: getattr(rag, name) for name in self.STATE}
-        rag.documents = []
-        rag._curriculum_loaded = False
-        rag.index = None
-        rag.embedder = None
+        self._saved_default = rag.default_index
+        rag.default_index = rag.RagIndex()
 
     def tearDown(self):
-        for name, value in self._saved.items():
-            setattr(rag, name, value)
+        rag.default_index = self._saved_default
 
 
 class ChunkTextTests(RagTestCase):
@@ -111,9 +113,9 @@ class IndexStalenessTests(RagTestCase):
         os.utime(path, (when, when))
 
     def write_index(self, tmp, when):
-        rag.INDEX_PATH = os.path.join(tmp, "i.faiss")
-        rag.DOCS_PATH = os.path.join(tmp, "i_docs.pkl")
-        for path in (rag.INDEX_PATH, rag.DOCS_PATH):
+        rag.default_index.index_path = os.path.join(tmp, "i.faiss")
+        rag.default_index.docs_path = os.path.join(tmp, "i_docs.pkl")
+        for path in (rag.default_index.index_path, rag.default_index.docs_path):
             with open(path, "w") as f:
                 f.write("x")
             self.stamp(path, when)
@@ -127,17 +129,17 @@ class IndexStalenessTests(RagTestCase):
 
     def test_missing_index_is_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
-            rag.INDEX_PATH = os.path.join(tmp, "absent.faiss")
-            rag.DOCS_PATH = os.path.join(tmp, "absent_docs.pkl")
+            rag.default_index.index_path = os.path.join(tmp, "absent.faiss")
+            rag.default_index.docs_path = os.path.join(tmp, "absent_docs.pkl")
 
             self.assertTrue(rag.is_index_stale(tmp))
 
     def test_docs_sidecar_missing_is_stale(self):
         """Both halves must exist — an index without its metadata is useless."""
         with tempfile.TemporaryDirectory() as tmp:
-            rag.INDEX_PATH = os.path.join(tmp, "i.faiss")
-            rag.DOCS_PATH = os.path.join(tmp, "i_docs.pkl")
-            with open(rag.INDEX_PATH, "w") as f:
+            rag.default_index.index_path = os.path.join(tmp, "i.faiss")
+            rag.default_index.docs_path = os.path.join(tmp, "i_docs.pkl")
+            with open(rag.default_index.index_path, "w") as f:
                 f.write("x")
 
             self.assertTrue(rag.is_index_stale(tmp))
@@ -241,8 +243,8 @@ class FakeEmbedder:
 
 class RetrieveTests(RagTestCase):
     def install_fakes(self, scores, indices):
-        rag.embedder = FakeEmbedder()
-        rag.index = FakeIndex([scores], [indices])
+        rag.default_index.embedder = FakeEmbedder()
+        rag.default_index.index = FakeIndex([scores], [indices])
         import sys
         import types
 
@@ -256,7 +258,7 @@ class RetrieveTests(RagTestCase):
         self.assertEqual(rag.retrieve("anything"), [])
 
     def test_chunks_below_the_score_floor_are_dropped(self):
-        rag.documents = [{"text": "keep"}, {"text": "drop"}]
+        rag.default_index.documents = [{"text": "keep"}, {"text": "drop"}]
         self.install_fakes([rag.MIN_SCORE + 0.1, rag.MIN_SCORE - 0.1], [0, 1])
 
         results = rag.retrieve("q")
@@ -264,14 +266,14 @@ class RetrieveTests(RagTestCase):
         self.assertEqual(results, [{"text": "keep"}])
 
     def test_a_score_exactly_at_the_floor_is_kept(self):
-        rag.documents = [{"text": "edge"}]
+        rag.default_index.documents = [{"text": "edge"}]
         self.install_fakes([rag.MIN_SCORE], [0])
 
         self.assertEqual(rag.retrieve("q"), [{"text": "edge"}])
 
     def test_the_negative_one_sentinel_is_skipped(self):
         """FAISS pads short result sets with -1."""
-        rag.documents = [{"text": "real"}]
+        rag.default_index.documents = [{"text": "real"}]
         self.install_fakes([0.9, 0.9], [0, -1])
 
         self.assertEqual(rag.retrieve("q"), [{"text": "real"}])
@@ -287,12 +289,14 @@ class EnsureCurriculumLoadedTests(RagTestCase):
             self._patch(name)
 
     def _patch(self, name):
-        original = getattr(rag, name)
-        setattr(rag, name, lambda *a, _n=name, **k: self.calls.append(_n))
-        self.addCleanup(setattr, rag, name, original)
+        """Patch on the instance: these are methods, so ensure_curriculum_loaded
+        reaches them through self, not through the module namespace."""
+        setattr(
+            rag.default_index, name, lambda *a, _n=name, **k: self.calls.append(_n)
+        )
 
     def test_a_second_call_is_a_no_op(self):
-        rag._curriculum_loaded = True
+        rag.default_index._curriculum_loaded = True
 
         rag.ensure_curriculum_loaded("anywhere")
 
@@ -302,17 +306,15 @@ class EnsureCurriculumLoadedTests(RagTestCase):
         rag.ensure_curriculum_loaded(os.path.join("does", "not", "exist"))
 
         self.assertEqual(self.calls, [])
-        self.assertTrue(rag._curriculum_loaded)
+        self.assertTrue(rag.default_index._curriculum_loaded)
 
     def force_staleness(self, stale):
-        original = rag.is_index_stale
-        self.addCleanup(setattr, rag, "is_index_stale", original)
-        rag.is_index_stale = lambda _p: stale
+        rag.default_index.is_index_stale = lambda _p: stale
 
     def test_a_stale_index_is_rebuilt_and_saved(self):
         self.force_staleness(True)
         with tempfile.TemporaryDirectory() as tmp:
-            rag.index = FakeIndex([[0.0]], [[0]])
+            rag.default_index.index = FakeIndex([[0.0]], [[0]])
 
             rag.ensure_curriculum_loaded(tmp)
 
@@ -334,9 +336,9 @@ class CurriculumWalkTests(RagTestCase):
     def setUp(self):
         super().setUp()
         self.loaded = []
-        original = rag.load_all_files
-        rag.load_all_files = lambda folder, root=None: self.loaded.append(folder)
-        self.addCleanup(setattr, rag, "load_all_files", original)
+        rag.default_index.load_all_files = (
+            lambda folder, root=None: self.loaded.append(folder)
+        )
 
     def test_nested_directories_are_indexed(self):
         """Regression: the walk used to stop after immediate subdirectories.
@@ -366,9 +368,7 @@ class FileLoaderTests(RagTestCase):
     def setUp(self):
         super().setUp()
         self.added = []
-        original = rag.add_documents
-        rag.add_documents = self.added.extend
-        self.addCleanup(setattr, rag, "add_documents", original)
+        rag.default_index.add_documents = self.added.extend
 
     def test_txt_files_are_chunked_with_a_relative_source(self):
         with tempfile.TemporaryDirectory() as tmp:

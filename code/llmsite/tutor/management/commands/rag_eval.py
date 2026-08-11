@@ -65,8 +65,8 @@ class Command(BaseCommand):
             chunks = len(indexed.documents)
             self.stdout.write(
                 f"Indexed {chunks} chunks "
-                f"(chunk_size={indexed.CHUNK_SIZE}, overlap={indexed.CHUNK_OVERLAP}, "
-                f"model={indexed.EMBED_MODEL})\n"
+                f"(chunk_size={rag.CHUNK_SIZE}, overlap={rag.CHUNK_OVERLAP}, "
+                f"model={rag.EMBED_MODEL})\n"
             )
             rows, summary = evaluate(indexed, queries, top_k)
 
