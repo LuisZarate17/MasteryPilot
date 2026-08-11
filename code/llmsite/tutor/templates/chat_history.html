@@ -84,6 +84,11 @@ function formatTeacherMessage(text, quizAttempt) {
 }
 
 function renderReadOnlyQuiz(quizObj, quizAttempt) {
+  // has_submission lives on the attempt, not on its items — the per-question
+  // entries carry only qid/student_answer/correct_answer/is_correct. Reading it
+  // off an item is always undefined, which silently hid the whole student
+  // answer block from teachers. Same shape mismatch family as 6d9d6ec.
+  const hasSubmission = !!(quizAttempt && quizAttempt.has_submission);
   const attemptMap = new Map();
   if (quizAttempt && Array.isArray(quizAttempt.items)) {
     quizAttempt.items.forEach(item => {
@@ -133,7 +138,7 @@ function renderReadOnlyQuiz(quizObj, quizAttempt) {
       html += `<div class="text-sm text-gray-700">Correct answer: <span class="font-semibold text-green-700">${escapeHtml(correct || "N/A")}</span></div>`;
     }
 
-    if (attempt && attempt.has_submission) {
+    if (hasSubmission && attempt) {
       html += `<div class="text-sm text-gray-700">Student answer: <span class="font-semibold ${isCorrect === true ? "text-green-700" : (isCorrect === false ? "text-red-700" : "text-gray-800")}">${escapeHtml(studentAnswer || "No answer")}</span></div>`;
       if (isCorrect === true) {
         html += `<div class="text-xs font-semibold text-green-700">Result: Correct</div>`;
