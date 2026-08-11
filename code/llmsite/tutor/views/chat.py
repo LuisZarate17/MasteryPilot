@@ -233,6 +233,7 @@ def api_new_session(request):
 
 
 @require_http_methods(["POST"])
+@login_required
 def api_chat(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
@@ -332,9 +333,22 @@ def api_list_sessions(request):
         except (TypeError, ValueError):
             return JsonResponse({"sessions": []})
 
+        # Non-admin teachers may only list sessions for students assigned to
+        # them, matching api_session_messages, api_export_chats and
+        # progress_detail. Without this any teacher could enumerate any user's
+        # sessions by id — including other teachers' and admins'.
+        if not is_admin(request.user):
+            try:
+                teacher_profile = TeacherProfile.objects.get(user=request.user)
+                student_profile = StudentProfile.objects.get(user_id=student_id)
+            except (TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
+                return JsonResponse({"error": "Access denied"}, status=403)
+
+            if student_profile.teacher_id != teacher_profile.id:
+                return JsonResponse({"error": "Access denied"}, status=403)
+
         sessions = Session.objects.filter(owner_id=student_id).order_by("-created_at")
 
-    print("api_list_sessions user=", request.user.username, "is_teacher=", is_teacher_or_admin(request.user), "GET=", dict(request.GET))
     data = [{"id": str(s.id), "title": s.title, "created_at": s.created_at.isoformat()} for s in sessions]
     return JsonResponse({"sessions": data})
 

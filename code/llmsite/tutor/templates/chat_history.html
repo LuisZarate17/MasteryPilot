@@ -295,27 +295,13 @@ async function loadSessionMessages(sessionId) {
       return;
     }
 
-    // 2) No DB messages -> ask backend for the initial assistant reply for this session
-    //    (api_init returns the LLM's initial message; it does not create DB sessions)
-    const initRes = await fetch("{% url 'api_init' %}", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ session_id: sessionId })
-    });
-
-    if (!initRes.ok) {
-      const errText = await initRes.text();
-      appendMessage("model", "Error initializing chat: " + errText);
-      return;
-    }
-
-    const initData = await initRes.json();
-    // Show LLM first message (fallback to friendly text)
-    appendMessage("model", initData.model_text || "(no text)");
-
-    // NOTE: if api_new_session already saved the first messages to DB, the above DB fetch would have returned them.
-    // This branch handles the case where DB is empty but we still want the LLM's initial reply shown.
+    // 2) No DB messages. This is a read-only view of someone else's session,
+    //    so there is nothing to bootstrap — just say so. It used to POST to
+    //    api_init here, which Phase 5 deleted; the stale url tag pointing at it
+    //    made this whole page raise NoReverseMatch. Starting a chat here would
+    //    have been wrong anyway: it would attribute messages to the student,
+    //    and api_session_init is owner-scoped so a teacher cannot call it.
+    appendMessage("model", "This session has no messages yet.");
   } catch (err) {
     appendMessage("model", "Error loading chat: " + err.message);
   }
