@@ -1,0 +1,7 @@
+Cell Structure
+
+Every living thing is built from cells. The cell membrane forms the outer boundary and controls which substances pass in and out. Inside, the cytoplasm is the jelly-like fluid in which the organelles sit.
+
+The nucleus holds the cell's genetic material and directs its activities. The mitochondria are often called the powerhouses of the cell because they carry out respiration, releasing energy from glucose and storing it as ATP. Ribosomes assemble proteins from amino acids according to instructions carried from the nucleus.
+
+Plant cells have three features animal cells lack: a rigid cell wall made of cellulose that gives the cell its shape, a large central vacuole that stores sap and keeps the cell firm, and chloroplasts. Animal cells have no cell wall, so their shape is more flexible.

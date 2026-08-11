@@ -1,0 +1,7 @@
+Quadratic Equations
+
+A quadratic equation has the standard form ax^2 + bx + c = 0 with a not equal to zero. Unlike a linear equation it may have two solutions, one repeated solution, or no real solutions at all.
+
+The quadratic formula gives the roots directly: x equals negative b, plus or minus the square root of b squared minus four a c, all divided by two a. The expression under the square root, b squared minus four a c, is called the discriminant. When the discriminant is positive there are two distinct real roots. When it is zero there is exactly one repeated root. When it is negative there are no real roots, only complex ones.
+
+Some quadratics factor neatly over the integers, and factoring is faster when it works. Completing the square is the method the quadratic formula is derived from.

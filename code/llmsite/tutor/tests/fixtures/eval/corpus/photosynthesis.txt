@@ -1,0 +1,7 @@
+Photosynthesis
+
+Photosynthesis is the process by which green plants convert light energy into chemical energy stored as sugar. It takes place in the chloroplast, an organelle containing the green pigment chlorophyll, which absorbs light most strongly in the blue and red parts of the spectrum.
+
+The overall reaction combines carbon dioxide and water, using light energy, to produce glucose and oxygen. Carbon dioxide enters the leaf through small pores called stomata, and water arrives from the roots through the xylem.
+
+The process has two stages. The light-dependent reactions occur in the thylakoid membranes and produce ATP and NADPH while releasing oxygen as a by-product. The light-independent reactions, also called the Calvin cycle, occur in the stroma and use that ATP and NADPH to fix carbon dioxide into sugar.

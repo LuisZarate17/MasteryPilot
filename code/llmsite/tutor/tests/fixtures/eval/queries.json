@@ -1,0 +1,35 @@
+{
+  "description": "Labelled retrieval set for `manage.py rag_eval`. Each query names the corpus documents that should come back. Queries with an empty `relevant` list SHOULD return nothing at all — the score cutoff is supposed to reject them, and a system that always returns its top-k will fail those rather than pass them for free.",
+  "kinds": {
+    "paraphrase": "Asks for a concept in the student's own words, sharing few terms with the source. Dense retrieval should handle these.",
+    "lexical": "Turns on a specific rare term. Dense embeddings compress rare terms badly; a sparse leg should carry these.",
+    "near_miss": "Two corpus documents are plausible; only one is right. Measures precision, not just recall.",
+    "code": "The answer lives inside a fenced code block. These fail while markdown ingestion deletes code.",
+    "off_topic": "Nothing in the corpus answers this. Success is returning no results."
+  },
+  "queries": [
+    {"query": "how do I find the value of x when the letter is on both sides", "relevant": ["linear_equations.txt"], "kind": "paraphrase"},
+    {"query": "why can I do the same thing to both sides of an equals sign", "relevant": ["linear_equations.txt"], "kind": "paraphrase"},
+    {"query": "what is the discriminant", "relevant": ["quadratic_equations.txt"], "kind": "lexical"},
+    {"query": "quadratic formula", "relevant": ["quadratic_equations.txt"], "kind": "lexical"},
+    {"query": "how can I tell if an equation has no real answers", "relevant": ["quadratic_equations.txt"], "kind": "paraphrase"},
+    {"query": "completing the square", "relevant": ["quadratic_equations.txt"], "kind": "lexical"},
+    {"query": "what is the bottom number of a fraction called", "relevant": ["fractions.txt"], "kind": "paraphrase"},
+    {"query": "least common denominator", "relevant": ["fractions.txt"], "kind": "lexical"},
+    {"query": "do I need a common denominator to multiply fractions", "relevant": ["fractions.txt"], "kind": "near_miss", "note": "The corpus says no; the adjacent addition rule says yes. Retrieving the addition passage alone is a wrong answer that looks right."},
+    {"query": "how do plants make food from sunlight", "relevant": ["photosynthesis.txt"], "kind": "paraphrase"},
+    {"query": "chlorophyll", "relevant": ["photosynthesis.txt"], "kind": "lexical"},
+    {"query": "what is the Calvin cycle", "relevant": ["photosynthesis.txt"], "kind": "lexical"},
+    {"query": "what do stomata do", "relevant": ["photosynthesis.txt"], "kind": "lexical"},
+    {"query": "what do mitochondria do", "relevant": ["cell_structure.txt"], "kind": "near_miss", "note": "Both biology documents discuss energy and ATP. Only cell_structure.txt covers respiration."},
+    {"query": "which parts does a plant cell have that an animal cell does not", "relevant": ["cell_structure.txt"], "kind": "near_miss", "note": "Chloroplasts appear in both documents; the contrast is only in cell_structure.txt."},
+    {"query": "what holds the genetic material in a cell", "relevant": ["cell_structure.txt"], "kind": "paraphrase"},
+    {"query": "what is an accumulator variable", "relevant": ["python_loops.md"], "kind": "lexical"},
+    {"query": "how do I repeat something when I do not know how many times", "relevant": ["python_loops.md"], "kind": "paraphrase"},
+    {"query": "how do I use range to loop from 1 to 10", "relevant": ["python_loops.md"], "kind": "code", "note": "range(1, 11) exists only inside a fenced block. Expected to fail until markdown ingestion stops deleting code."},
+    {"query": "what does print(count) do inside a while loop", "relevant": ["python_loops.md"], "kind": "code", "note": "Same: the loop body is code-only."},
+    {"query": "what is the capital of France", "relevant": [], "kind": "off_topic"},
+    {"query": "how do I reset my password", "relevant": [], "kind": "off_topic"},
+    {"query": "who won the world cup in 1998", "relevant": [], "kind": "off_topic"}
+  ]
+}

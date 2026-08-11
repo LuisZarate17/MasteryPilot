@@ -1,0 +1,7 @@
+Solving Linear Equations
+
+A linear equation in one variable can be written as ax + b = 0, where a and b are constants and a is not zero. Solving the equation means finding the value of x that makes the statement true.
+
+The strategy is to isolate the variable on one side of the equals sign. You may add or subtract the same quantity from both sides without changing the solution, and you may multiply or divide both sides by any nonzero number. Each of these operations produces an equivalent equation with exactly the same solution set.
+
+When the variable appears on both sides, collect like terms first. Move all terms containing the variable to one side and all constant terms to the other. Always check your answer by substituting it back into the original equation.
