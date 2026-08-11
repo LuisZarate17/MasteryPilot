@@ -1,0 +1,43 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # requirements.txt is Django, gunicorn and python-dotenv. The LLM stack
+      # in requirements-llm.txt is deliberately NOT installed: the suite must
+      # pass without torch, transformers, sentence-transformers or faiss, and
+      # this job is what keeps that true.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # DJANGO_SECRET_KEY is the only variable the suite needs. In particular
+      # do not set ADMIN_USER or ADMIN_EMAIL: migration 0002 raises
+      # ImproperlyConfigured when either is set without ADMIN_PASS, which
+      # aborts the run before a single test executes.
+      - name: Run tests
+        working-directory: code/llmsite
+        env:
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
+        run: python manage.py test --verbosity 2
+
+      - name: Check the app imports without the LLM extras
+        working-directory: code/llmsite
+        env:
+          DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
+        run: python -c "import rag, languagemodel; print('core-install imports OK')"
