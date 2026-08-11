@@ -75,6 +75,53 @@ class CurriculumInvalidationTests(MasteryPilotTestCase):
 
         self.assertEqual(self.invalidations, [])
 
+    def upload(self, name, content_type, content=b"Fractions divide a whole."):
+        self.post(
+            "upload_curriculum",
+            {"title": "t", "file": SimpleUploadedFile(name, content, content_type=content_type)},
+        )
+        return os.path.exists(os.path.join(self.tmp, name))
+
+    def test_every_indexable_format_can_be_uploaded(self):
+        """rag knew how to read these long before the dashboard would accept them.
+
+        md, docx and json had working, tested extractors that no upload could
+        ever reach — the only way in was copying a file onto the server by hand.
+        """
+        cases = [
+            ("a.txt", "text/plain"),
+            ("b.md", "text/markdown"),
+            ("c.json", "application/json"),
+            ("d.pdf", "application/pdf"),
+            ("e.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ]
+        for name, content_type in cases:
+            with self.subTest(name=name):
+                self.assertTrue(self.upload(name, content_type))
+
+    def test_every_uploadable_extension_has_an_extractor(self):
+        """The two lists have to agree, or an upload is accepted and never read."""
+        from tutor.views.curriculum import ALLOWED_UPLOAD_TYPES
+
+        uploadable = {f".{ext}" for ext in ALLOWED_UPLOAD_TYPES}
+
+        self.assertTrue(uploadable <= set(rag.EXTRACTORS), uploadable - set(rag.EXTRACTORS))
+
+    def test_browser_content_type_variants_are_accepted(self):
+        """Firefox sends octet-stream for .md; Chrome sends text/markdown or nothing."""
+        for content_type in ("text/markdown", "text/plain", "application/octet-stream", ""):
+            with self.subTest(content_type=content_type):
+                self.assertTrue(self.upload(f"n{len(content_type)}.md", content_type))
+
+    def test_a_charset_parameter_does_not_defeat_the_check(self):
+        self.assertTrue(self.upload("charset.txt", "text/plain; charset=utf-8"))
+
+    def test_an_unsupported_extension_is_still_refused(self):
+        self.assertFalse(self.upload("macro.xlsm", "application/vnd.ms-excel.sheet.macroEnabled.12"))
+
+    def test_a_content_type_implausible_for_its_extension_is_refused(self):
+        self.assertFalse(self.upload("claims.pdf", "text/plain"))
+
     def test_a_failure_to_invalidate_does_not_break_the_upload(self):
         """The RAG stack is optional; the dashboard has to work without it."""
         def explode():

@@ -1010,8 +1010,115 @@ class FileLoaderTests(RagTestCase):
         self.assertEqual(self.added, [])
 
     def test_docx_loading_is_a_no_op_without_python_docx(self):
-        """python-docx is in no requirements file; this path must stay safe."""
+        """Safe when the optional dependency is absent, as it is here."""
         with tempfile.TemporaryDirectory() as tmp:
             rag.load_docx_files(tmp, tmp)
 
         self.assertEqual(self.added, [])
+
+
+class LoaderDispatchTests(RagTestCase):
+    """One walk over a table, where five near-identical functions used to be."""
+
+    def setUp(self):
+        super().setUp()
+        self.added = []
+        rag.default_index.add_documents = self.added.extend
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def write(self, name, content="A sentence of curriculum."):
+        path = os.path.join(self.tmp.name, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        return path
+
+    def sources(self):
+        return [chunk["source"] for chunk in self.added]
+
+    def test_every_supported_format_has_an_extractor(self):
+        self.assertEqual(set(rag.EXTRACTORS), {".txt", ".md", ".pdf", ".docx", ".json"})
+
+    def test_one_call_picks_up_every_supported_format(self):
+        self.write("a.txt")
+        self.write("b.md", "# Heading\n\nSome prose about fractions.")
+        self.write("c.json", '[{"title": "Ratios", "content": "A ratio compares two values."}]')
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["a.txt", "b.md", "c.json/Ratios"])
+
+    def test_unsupported_extensions_are_ignored(self):
+        self.write("notes.rtf")
+        self.write("sheet.xlsx")
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.added, [])
+
+    def test_extensions_are_matched_case_insensitively(self):
+        """A teacher's file from Windows may well be README.TXT."""
+        self.write("SHOUTING.TXT")
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["SHOUTING.TXT"])
+
+    def test_files_are_read_in_a_deterministic_order(self):
+        """os.listdir order is not guaranteed, and it decides chunk positions."""
+        for name in ("c.txt", "a.txt", "b.txt"):
+            self.write(name)
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["a.txt", "b.txt", "c.txt"])
+
+    def test_an_unreadable_file_is_skipped_and_the_rest_still_index(self):
+        """Bug E, exercised for real: PyPDF2 is absent, so every .pdf raises.
+
+        One bad file used to abort the entire corpus build. Combined with the
+        load-once latch, that left the process serving a half-built index until
+        somebody restarted it.
+        """
+        self.write("good.txt")
+        self.write("broken.pdf", "not really a pdf")
+        self.write("also_good.md", "More prose.")
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["also_good.md", "good.txt"])
+
+    def test_an_empty_file_produces_no_chunks(self):
+        self.write("blank.txt", "   \n\n  ")
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.added, [])
+
+    def test_one_json_file_can_yield_several_labelled_sources(self):
+        self.write(
+            "lessons.json",
+            '[{"title": "Ratios", "content": "A ratio compares."},'
+            ' {"title": "Percents", "content": "A percent is per hundred."}]',
+        )
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["lessons.json/Ratios", "lessons.json/Percents"])
+
+    def test_malformed_json_is_skipped_rather_than_fatal(self):
+        self.write("bad.json", "{not json")
+        self.write("fine.txt")
+
+        rag.load_all_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["fine.txt"])
+
+    def test_the_single_format_wrappers_still_filter(self):
+        """The public load_*_files names are the tested surface; keep them honest."""
+        self.write("a.txt")
+        self.write("b.md", "Prose.")
+
+        rag.load_txt_files(self.tmp.name, self.tmp.name)
+
+        self.assertEqual(self.sources(), ["a.txt"])

@@ -18,10 +18,35 @@ from ..models import Chat as DBChat, Session, StudentProfile, TeacherProfile
 from ..utils import is_admin, is_teacher_or_admin
 
 
+# Extension -> content types a browser might plausibly send for it.
+#
+# The extension is the real control: it decides which extractor rag.py runs,
+# and these files are only ever read as text, never executed. The content type
+# is client-supplied and trivially forged, so it is a guard against an obvious
+# mistake — uploading a spreadsheet named .txt — and not a security boundary.
+# It is a set per extension because browsers disagree: Firefox sends
+# application/octet-stream for .md, Chrome sends text/markdown or nothing at
+# all, and a strict single-value match rejected all of them.
+#
+# rag.EXTRACTORS is the other half of this list. Anything indexable that is
+# missing here can only reach the corpus by someone copying it onto the server
+# by hand, which is how md, docx and json sat unreachable through the UI while
+# being fully supported and tested underneath.
 ALLOWED_UPLOAD_TYPES = {
-    "txt": "text/plain",
-    "pdf": "application/pdf",
+    "txt": {"text/plain", "application/octet-stream", ""},
+    "md": {"text/markdown", "text/x-markdown", "text/plain", "application/octet-stream", ""},
+    "json": {"application/json", "text/json", "text/plain", "application/octet-stream", ""},
+    "pdf": {"application/pdf", "application/x-pdf"},
+    "docx": {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/octet-stream",
+    },
 }
+
+
+def _declared_type(uploaded):
+    """Content type without parameters, lowercased. 'text/plain; charset=x' -> 'text/plain'."""
+    return (uploaded.content_type or "").split(";")[0].strip().lower()
 
 
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
@@ -102,8 +127,8 @@ def upload_curriculum(request):
     if ext not in ALLOWED_UPLOAD_TYPES:
         return redirect("dashboard")
 
-    # Verify MIME type matches expected content type
-    if file.content_type != ALLOWED_UPLOAD_TYPES[ext]:
+    # Verify the declared content type is plausible for that extension
+    if _declared_type(file) not in ALLOWED_UPLOAD_TYPES[ext]:
         return redirect("dashboard")
 
     os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)

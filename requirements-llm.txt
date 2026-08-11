@@ -24,6 +24,12 @@ PyPDF2==3.0.1
 faiss-cpu==1.15.0
 sentence-transformers==5.7.0
 
+# .docx ingestion. Required, not optional: the dashboard accepts .docx uploads,
+# and without this rag.py's extractor returns nothing — so the file would
+# upload, appear in the curriculum list, and never be indexed. Silently
+# ignoring a teacher's document is worse than refusing it.
+python-docx==1.2.0
+
 # Local model adapters (code/llmsite/languagemodel.py).
 # transformers is held below 5.0 deliberately: the adapters were written and
 # demoed against the 4.x API and have not been revalidated against 5.x.

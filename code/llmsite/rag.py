@@ -152,6 +152,81 @@ def _rel_source(file_path, curriculum_root):
         return os.path.basename(file_path)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Extractors — file on disk to text, one per format
+#
+# Each returns a list of (text, source_suffix) pairs. Only JSON returns more
+# than one: it holds several records per file and each earns its own label.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _read_text(filepath):
+    """UTF-8, falling back to latin-1 rather than losing the file."""
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(filepath, "r", encoding="latin-1") as f:
+            return f.read()
+
+
+def strip_markdown(content):
+    """Reduce markdown to the prose underneath it."""
+    content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+    content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
+    content = re.sub(r'`{1,3}[\s\S]*?`{1,3}', '', content)
+    content = re.sub(r'[*_]{1,2}([^*_\n]+)[*_]{1,2}', r'\1', content)
+    content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+    return content
+
+
+def _extract_txt(filepath):
+    return [(_read_text(filepath), "")]
+
+
+def _extract_md(filepath):
+    return [(strip_markdown(_read_text(filepath)), "")]
+
+
+def _extract_pdf(filepath):
+    from PyPDF2 import PdfReader
+
+    reader = PdfReader(filepath)
+    return [("".join(page.extract_text() or "" for page in reader.pages), "")]
+
+
+def _extract_docx(filepath):
+    try:
+        import docx as _docx
+    except ImportError:
+        # python-docx is optional. Returning nothing keeps this a quiet no-op
+        # rather than a per-file error for a format we simply cannot read here.
+        return []
+    document = _docx.Document(filepath)
+    return [("\n".join(p.text for p in document.paragraphs if p.text.strip()), "")]
+
+
+def _extract_json(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    items = data if isinstance(data, list) else [data]
+    pieces = []
+    for item in items:
+        if isinstance(item, dict) and item.get("content"):
+            title = item.get("title", os.path.basename(filepath))
+            pieces.append((item["content"], f"/{title}"))
+    return pieces
+
+
+EXTRACTORS = {
+    ".txt": _extract_txt,
+    ".md": _extract_md,
+    ".pdf": _extract_pdf,
+    ".docx": _extract_docx,
+    ".json": _extract_json,
+}
+
+
 def build_rag_system_message(chunks):
     """Format retrieved chunks as a system-message string with source attribution."""
     if not chunks:
@@ -554,94 +629,69 @@ class RagIndex:
         return results
 
     # ── File loaders ─────────────────────────────────────────────────────────
+    #
+    # Five near-identical functions used to live here, each doing listdir,
+    # endswith, open, chunk, add. They are now one walk over a dispatch table:
+    # an extractor turns a file into text, and everything after that is shared.
+    #
+    # An extractor returns a list of (text, source_suffix) pairs rather than a
+    # single string, because JSON files hold several records and each deserves
+    # its own source label. Every other format returns exactly one pair.
+    #
+    # The public load_*_files names are kept as thin wrappers. They are the
+    # tested surface, and there was no reason to churn callers or tests to
+    # collapse an implementation detail.
+
+    def load_files(self, folder_path, curriculum_root=None, extensions=None):
+        """Index every supported file directly inside *folder_path*.
+
+        A file that cannot be read is skipped with a message rather than
+        aborting the build. Teachers upload arbitrary PDFs through the
+        dashboard, and one encrypted or truncated file used to take the whole
+        corpus down with it — which, combined with the load-once latch, left
+        the process serving a half-built index until someone restarted it.
+        """
+        root = curriculum_root or folder_path
+        # Sorted for determinism: os.listdir order is not guaranteed, and the
+        # order files are read decides the order chunks sit in the index.
+        for filename in sorted(os.listdir(folder_path)):
+            extension = os.path.splitext(filename)[1].lower()
+            if extensions is not None and extension not in extensions:
+                continue
+            extract = EXTRACTORS.get(extension)
+            if extract is None:
+                continue
+
+            filepath = os.path.join(folder_path, filename)
+            try:
+                pieces = extract(filepath)
+            except Exception as exc:
+                print(f"[RAG] Skipping {filepath}: {type(exc).__name__}: {exc}")
+                continue
+
+            label = _rel_source(filepath, root)
+            for text, suffix in pieces:
+                if text and text.strip():
+                    self.add_documents(chunk_text(text, label + suffix))
 
     def load_txt_files(self, folder_path, curriculum_root=None):
-        root = curriculum_root or folder_path
-        for filename in os.listdir(folder_path):
-            if not filename.endswith(".txt"):
-                continue
-            filepath = os.path.join(folder_path, filename)
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-            except UnicodeDecodeError:
-                with open(filepath, "r", encoding="latin-1") as f:
-                    content = f.read()
-            self.add_documents(chunk_text(content, _rel_source(filepath, root)))
+        self.load_files(folder_path, curriculum_root, extensions={".txt"})
 
     def load_pdf_files(self, folder_path, curriculum_root=None):
-        from PyPDF2 import PdfReader
-
-        root = curriculum_root or folder_path
-        for filename in os.listdir(folder_path):
-            if not filename.endswith(".pdf"):
-                continue
-            filepath = os.path.join(folder_path, filename)
-            reader = PdfReader(filepath)
-            text = "".join(page.extract_text() or "" for page in reader.pages)
-            self.add_documents(chunk_text(text, _rel_source(filepath, root)))
+        self.load_files(folder_path, curriculum_root, extensions={".pdf"})
 
     def load_md_files(self, folder_path, curriculum_root=None):
-        root = curriculum_root or folder_path
-        for filename in os.listdir(folder_path):
-            if not filename.endswith(".md"):
-                continue
-            filepath = os.path.join(folder_path, filename)
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-            except UnicodeDecodeError:
-                with open(filepath, "r", encoding="latin-1") as f:
-                    content = f.read()
-            # Strip common markdown syntax before chunking
-            content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
-            content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-            content = re.sub(r'`{1,3}[\s\S]*?`{1,3}', '', content)
-            content = re.sub(r'[*_]{1,2}([^*_\n]+)[*_]{1,2}', r'\1', content)
-            content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
-            self.add_documents(chunk_text(content, _rel_source(filepath, root)))
+        self.load_files(folder_path, curriculum_root, extensions={".md"})
 
     def load_docx_files(self, folder_path, curriculum_root=None):
-        try:
-            import docx as _docx
-        except ImportError:
-            return
-        root = curriculum_root or folder_path
-        for filename in os.listdir(folder_path):
-            if not filename.endswith(".docx"):
-                continue
-            filepath = os.path.join(folder_path, filename)
-            doc = _docx.Document(filepath)
-            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-            self.add_documents(chunk_text(text, _rel_source(filepath, root)))
+        self.load_files(folder_path, curriculum_root, extensions={".docx"})
 
     def load_json_files(self, folder_path, curriculum_root=None):
-        root = curriculum_root or folder_path
-        for filename in os.listdir(folder_path):
-            if not filename.endswith(".json"):
-                continue
-            filepath = os.path.join(folder_path, filename)
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                continue
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                if isinstance(item, dict):
-                    title   = item.get("title", filename)
-                    content = item.get("content", "")
-                    if content:
-                        source = _rel_source(filepath, root) + f"/{title}"
-                        self.add_documents(chunk_text(content, source))
+        self.load_files(folder_path, curriculum_root, extensions={".json"})
 
     def load_all_files(self, folder_path, curriculum_root=None):
-        """Load all supported file types from a single folder."""
-        self.load_txt_files(folder_path, curriculum_root)
-        self.load_pdf_files(folder_path, curriculum_root)
-        self.load_md_files(folder_path, curriculum_root)
-        self.load_docx_files(folder_path, curriculum_root)
-        self.load_json_files(folder_path, curriculum_root)
+        """Load every supported file type from a single folder."""
+        self.load_files(folder_path, curriculum_root)
 
     def load_curriculum_folder(self, curriculum_path):
         """Load files from the curriculum root and every subdirectory below it.
