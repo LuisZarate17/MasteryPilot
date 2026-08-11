@@ -32,18 +32,40 @@ import json
 
 # Bumped when the sidecar's shape changes. An unrecognised version is treated
 # as unusable, which means "rebuild", not "crash".
-SIDECAR_VERSION = 1
+SIDECAR_VERSION = 2
 
 # ── Tuneable constants ────────────────────────────────────────────────────────
 CHUNK_SIZE    = 400   # target characters per chunk
 CHUNK_OVERLAP = 80    # characters carried forward into the next chunk
 TOP_K         = 5     # candidates retrieved before threshold filtering
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
-IVF_THRESHOLD = 1000  # switch to approximate IVF index above this many chunks
+# Above this many chunks, swap exact search for approximate IVF. Raised from
+# 1000: at that size nlist = min(100, n // 10) gave 100 centroids over 1000
+# vectors, about 10 training points each, far below what FAISS wants — it warns
+# and clusters badly. 20k vectors flat is ~30 MB and searches in milliseconds,
+# so staying exact for longer costs little and can only improve recall.
+IVF_THRESHOLD = 20_000
 
 # ── Embedding model ───────────────────────────────────────────────────────────
-EMBED_MODEL = "all-MiniLM-L6-v2"
-dimension   = 384
+# Swappable, but a swap invalidates every persisted index — see is_index_stale.
+EMBED_MODEL = os.getenv("RAG_EMBED_MODEL", "all-MiniLM-L6-v2")
+
+# all-MiniLM-L6-v2's width. Only a fallback for reporting before a model has
+# been loaded: the real dimension is asked of the model, never assumed.
+DEFAULT_DIMENSION = 384
+
+# One model per name, shared by every index in the process. Embedders are
+# stateless and large, so thirty corpora should not mean thirty copies in RAM.
+_EMBEDDERS = {}
+
+
+def get_shared_embedder(model_name=None):
+    name = model_name or EMBED_MODEL
+    if name not in _EMBEDDERS:
+        from sentence_transformers import SentenceTransformer
+
+        _EMBEDDERS[name] = SentenceTransformer(name)
+    return _EMBEDDERS[name]
 
 # ── Default persistence paths ─────────────────────────────────────────────────
 # These configure the default instance. A non-default RagIndex derives its own
@@ -153,8 +175,15 @@ def build_rag_system_message(chunks):
 class RagIndex:
     """One curriculum corpus: its chunks, its vectors, and where they persist."""
 
-    def __init__(self, curriculum_path=None, index_path=None, docs_path=None):
+    def __init__(self, curriculum_path=None, index_path=None, docs_path=None,
+                 embed_model=None):
         self.curriculum_path = curriculum_path
+        self.embed_model = embed_model or EMBED_MODEL
+
+        # Asked of the model on first use, or read back from the sidecar.
+        # Never assumed: a wrong width is the one mistake FAISS cannot detect
+        # for you if the numbers happen to agree.
+        self.dimension = None
 
         if index_path is None:
             # A derived path must sit *beside* the corpus, never inside it:
@@ -181,12 +210,23 @@ class RagIndex:
     # ── Lazily built singletons ──────────────────────────────────────────────
 
     def get_embedder(self):
-        """The sentence-transformers model, loaded once per index."""
+        """The sentence-transformers model, shared across indexes by name."""
         if self.embedder is None:
-            from sentence_transformers import SentenceTransformer
-
-            self.embedder = SentenceTransformer(EMBED_MODEL)
+            self.embedder = get_shared_embedder(self.embed_model)
         return self.embedder
+
+    def get_dimension(self):
+        """Vector width, asked of the model rather than hardcoded.
+
+        384 was written into the module as a constant beside a model name.
+        Changing the model then produced an index of the wrong width — and if
+        the replacement happened to be 384-wide too, nothing raised at all: the
+        cache loaded, queries embedded, and every answer was drawn from vectors
+        that meant something else.
+        """
+        if self.dimension is None:
+            self.dimension = self.get_embedder().get_sentence_embedding_dimension()
+        return self.dimension
 
     def get_index(self):
         """The FAISS index, created once per index."""
@@ -194,7 +234,7 @@ class RagIndex:
             import faiss
 
             # Inner product == cosine once vectors are L2-normalised.
-            self.index = faiss.IndexFlatIP(dimension)
+            self.index = faiss.IndexFlatIP(self.get_dimension())
         return self.index
 
     # ── Index management ─────────────────────────────────────────────────────
@@ -211,11 +251,18 @@ class RagIndex:
         self.get_index().add(vecs)
         self.documents.extend(chunk_dicts)
 
+    @property
+    def ntotal(self):
+        """Vectors held, without forcing an index (hence a model) into being."""
+        return 0 if self.index is None else self.index.ntotal
+
     def _sidecar_payload(self, manifest):
         """The metadata written beside the vectors."""
         return {
             "version": SIDECAR_VERSION,
-            "ntotal": self.get_index().ntotal,
+            "ntotal": self.ntotal,
+            "embed_model": self.embed_model,
+            "dimension": self.dimension,
             "corpus": self._corpus_key(self.curriculum_path),
             "manifest": manifest,
             "documents": self.documents,
@@ -262,10 +309,13 @@ class RagIndex:
         """
         import faiss
 
-        idx = self.get_index()
-        faiss.write_index(idx, self.index_path)
-        self._write_sidecar(self._sidecar_payload(manifest if manifest is not None else {}))
-        print(f"[RAG] Index saved: {idx.ntotal} vectors → {self.index_path}")
+        payload = self._sidecar_payload(manifest if manifest is not None else {})
+        # An empty corpus has no vectors to write, and building an index for it
+        # would mean downloading a model to describe nothing.
+        if self.index is not None:
+            faiss.write_index(self.index, self.index_path)
+        self._write_sidecar(payload)
+        print(f"[RAG] Index saved: {payload['ntotal']} vectors → {self.index_path}")
 
     def load_index(self):
         """Load FAISS index and document metadata from disk.
@@ -279,12 +329,26 @@ class RagIndex:
 
         payload = self._read_sidecar()
 
+        recorded_model = payload.get("embed_model")
+        if recorded_model != self.embed_model:
+            raise IndexUnusable(
+                f"index was built with {recorded_model!r}, this process uses "
+                f"{self.embed_model!r}"
+            )
+
+        documents = payload["documents"]
+        if payload["ntotal"] == 0:
+            # Nothing was indexed, so there is no vector file to read.
+            self.index = None
+            self.documents = []
+            print("[RAG] Index loaded from disk: empty corpus")
+            return
+
         try:
             index = faiss.read_index(self.index_path)
         except Exception as exc:
             raise IndexUnusable(f"vector index is unreadable: {exc}") from exc
 
-        documents = payload["documents"]
         if index.ntotal != payload["ntotal"]:
             raise IndexUnusable(
                 f"vector count {index.ntotal} does not match the recorded {payload['ntotal']}"
@@ -296,6 +360,9 @@ class RagIndex:
 
         self.index = index
         self.documents = documents
+        # Taken from the file, so reopening an index never has to load a model
+        # just to learn how wide its vectors are.
+        self.dimension = payload.get("dimension") or index.d
         print(f"[RAG] Index loaded from disk: {index.ntotal} vectors")
 
     # ── Corpus fingerprinting ────────────────────────────────────────────────
@@ -328,12 +395,16 @@ class RagIndex:
         return manifest
 
     def _saved_fingerprint(self):
-        """(corpus key, manifest) recorded in the sidecar, or (None, None)."""
-        if not os.path.exists(self.index_path):
-            return None, None
+        """(corpus key, manifest) recorded in the sidecar, or (None, None).
+
+        The sidecar alone is consulted: it is the commit record, and an empty
+        corpus legitimately has no vector file beside it.
+        """
         try:
             payload = self._read_sidecar()
         except IndexUnusable:
+            return None, None
+        if payload.get("embed_model") != self.embed_model:
             return None, None
         return payload.get("corpus"), payload.get("manifest")
 
@@ -360,18 +431,23 @@ class RagIndex:
 
     def _maybe_upgrade_to_ivf(self):
         """If corpus exceeds IVF_THRESHOLD, replace flat index with approximate IVF."""
-        import faiss
-        import numpy as np
+        # Nothing indexed: no index to upgrade, and no reason to load a model —
+        # or, since the guard precedes the import, to require faiss at all.
+        if self.index is None:
+            return
 
-        index = self.get_index()
+        import faiss
+
+        index = self.index
         n = index.ntotal
         if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
             return
         print(f"[RAG] {n} vectors — upgrading to approximate IVF index...")
-        all_vecs = np.vstack([index.reconstruct(i) for i in range(n)]).astype("float32")
+        all_vecs = index.reconstruct_n(0, n)
         nlist = min(100, n // 10)
-        quantiser = faiss.IndexFlatIP(dimension)
-        ivf = faiss.IndexIVFFlat(quantiser, dimension, nlist, faiss.METRIC_INNER_PRODUCT)
+        width = self.get_dimension()
+        quantiser = faiss.IndexFlatIP(width)
+        ivf = faiss.IndexIVFFlat(quantiser, width, nlist, faiss.METRIC_INNER_PRODUCT)
         ivf.train(all_vecs)
         ivf.add(all_vecs)
         ivf.nprobe = 10

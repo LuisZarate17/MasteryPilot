@@ -144,6 +144,8 @@ class IndexStalenessTests(RagTestCase):
         index._write_sidecar({
             "version": rag.SIDECAR_VERSION,
             "ntotal": 0,
+            "embed_model": index.embed_model,
+            "dimension": None,
             "corpus": index._corpus_key(self.curriculum),
             "manifest": rag.scan_manifest(self.curriculum),
             "documents": [],
@@ -340,8 +342,11 @@ class FakeFaiss:
 
 
 class CountingIndex:
-    def __init__(self, ntotal):
+    """A FAISS index reduced to the two numbers persistence cares about."""
+
+    def __init__(self, ntotal, d=rag.DEFAULT_DIMENSION):
         self.ntotal = ntotal
+        self.d = d
 
 
 class SidecarPersistenceTests(RagTestCase):
@@ -456,6 +461,230 @@ class SidecarPersistenceTests(RagTestCase):
         mutate(payload)
         with open(rag.default_index.docs_path, "w", encoding="utf-8") as handle:
             json.dump(payload, handle)
+
+
+class EmbeddingModelIdentityTests(RagTestCase):
+    """An index is only meaningful against the model that built it.
+
+    The dangerous case is not a width mismatch — FAISS catches that. It is
+    swapping one 384-wide model for another: the cached index loads, queries
+    embed, dimensions agree, nothing raises, and every answer is drawn from
+    vectors that meant something else.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.faiss = FakeFaiss().install(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        # The index lives beside the corpus, never inside it: is_index_stale
+        # walks the corpus, so a sidecar written within it would show up as a
+        # change to the very thing it describes.
+        self.corpus = os.path.join(self.tmp.name, "curriculum")
+        os.makedirs(self.corpus)
+        index = rag.default_index
+        index.index_path = os.path.join(self.tmp.name, "i.faiss")
+        index.docs_path = rag.sidecar_path_for(index.index_path)
+        index.curriculum_path = self.corpus
+        index.documents = [{"text": "body", "source": "a.txt", "chunk_idx": 0}]
+        index.index = CountingIndex(1)
+        index.dimension = rag.DEFAULT_DIMENSION
+        rag.save_index()
+
+    def test_the_model_that_built_the_index_is_recorded(self):
+        with open(rag.default_index.docs_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        self.assertEqual(payload["embed_model"], rag.EMBED_MODEL)
+        self.assertEqual(payload["dimension"], rag.DEFAULT_DIMENSION)
+
+    def test_a_different_model_of_the_same_width_is_refused(self):
+        """Same dimension, different meaning. Nothing else would catch this."""
+        rag.default_index.embed_model = "some-other-384-wide-model"
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_a_different_model_makes_the_index_stale(self):
+        """Refused at the staleness check too, so it rebuilds rather than retries."""
+        rag.default_index.embed_model = "some-other-384-wide-model"
+
+        self.assertTrue(rag.is_index_stale(self.corpus))
+
+    def test_the_same_model_round_trips(self):
+        rag.default_index.documents = []
+
+        rag.load_index()
+
+        self.assertEqual(len(rag.default_index.documents), 1)
+
+    def test_the_width_is_restored_without_loading_a_model(self):
+        """Reopening an index must not need the embedder just to learn its width."""
+        rag.default_index.documents = []
+        rag.default_index.dimension = None
+        rag.default_index.embedder = None
+
+        rag.load_index()
+
+        self.assertEqual(rag.default_index.dimension, rag.DEFAULT_DIMENSION)
+
+
+class ReconstructRecorder:
+    """A flat index that records how its vectors were read back."""
+
+    def __init__(self, ntotal, d=rag.DEFAULT_DIMENSION):
+        self.ntotal = ntotal
+        self.d = d
+        self.calls = []
+
+    def reconstruct_n(self, start, count):
+        self.calls.append(("reconstruct_n", start, count))
+        return [[0.0] * self.d for _ in range(count)]
+
+    def reconstruct(self, i):
+        self.calls.append(("reconstruct", i))
+        return [0.0] * self.d
+
+
+class IvfUpgradeTests(RagTestCase):
+    """Contract tests, deliberately, and the docstring says so.
+
+    These pin that FAISS is *called* correctly — reconstruct_n(0, n) in one go
+    rather than n separate round trips through Python. They say nothing about
+    what FAISS does with that call. Only the rag-verify workflow can speak to
+    that, and it does.
+    """
+
+    def install_faiss(self):
+        import sys
+        import types
+
+        class FlatIndex:
+            def __init__(self, d):
+                self.d = d
+                self.ntotal = 0
+
+        class IvfIndex:
+            def __init__(self, quantiser, d, nlist, metric):
+                self.quantiser, self.d, self.nlist, self.metric = quantiser, d, nlist, metric
+                self.trained = self.added = None
+                self.nprobe = None
+
+            def train(self, vectors):
+                self.trained = vectors
+
+            def add(self, vectors):
+                self.added = vectors
+
+        module = types.ModuleType("faiss")
+        module.IndexFlatIP = FlatIndex
+        module.IndexIVFFlat = IvfIndex
+        module.METRIC_INNER_PRODUCT = 0
+        sys.modules["faiss"] = module
+        self.addCleanup(sys.modules.pop, "faiss", None)
+        return module
+
+    def upgrade_with(self, ntotal):
+        self.install_faiss()
+        source = ReconstructRecorder(ntotal)
+        rag.default_index.index = source
+        rag.default_index.dimension = source.d
+        rag._maybe_upgrade_to_ivf()
+        return source
+
+    def test_vectors_are_read_back_in_one_call(self):
+        """The loop it replaces crossed the Python/C boundary once per vector."""
+        source = self.upgrade_with(rag.IVF_THRESHOLD)
+
+        self.assertEqual(source.calls, [("reconstruct_n", 0, rag.IVF_THRESHOLD)])
+
+    def test_no_per_vector_reconstruct_survives(self):
+        source = self.upgrade_with(rag.IVF_THRESHOLD)
+
+        self.assertNotIn("reconstruct", [call[0] for call in source.calls])
+
+    def test_a_corpus_below_the_threshold_stays_exact(self):
+        """Approximate search is a cost, not a feature, until the corpus earns it."""
+        source = self.upgrade_with(rag.IVF_THRESHOLD - 1)
+
+        self.assertEqual(source.calls, [])
+        self.assertIs(rag.default_index.index, source)
+
+    def test_the_threshold_is_high_enough_to_train_properly(self):
+        """nlist = min(100, n // 10) needs enough vectors per centroid.
+
+        At the old threshold of 1000 this gave 100 centroids over 1000 vectors —
+        about 10 training points each, far below what FAISS wants. It warns and
+        clusters badly, which costs recall exactly when the corpus is still
+        small enough not to need approximation at all.
+        """
+        nlist = min(100, rag.IVF_THRESHOLD // 10)
+
+        self.assertGreaterEqual(rag.IVF_THRESHOLD / nlist, 39)
+
+    def test_an_index_that_is_already_approximate_is_left_alone(self):
+        module = self.install_faiss()
+        already = module.IndexIVFFlat(None, rag.DEFAULT_DIMENSION, 10, 0)
+        already.ntotal = rag.IVF_THRESHOLD * 2
+        rag.default_index.index = already
+
+        rag._maybe_upgrade_to_ivf()
+
+        self.assertIs(rag.default_index.index, already)
+
+    def test_an_unbuilt_index_needs_neither_faiss_nor_a_model(self):
+        """An empty corpus must not download a model to upgrade nothing."""
+        rag.default_index.index = None
+
+        rag._maybe_upgrade_to_ivf()
+
+        self.assertIsNone(rag.default_index.index)
+
+
+class EmptyCorpusTests(RagTestCase):
+    """A curriculum directory with no files must not require a model.
+
+    get_index() asks the embedder how wide its vectors are, so an empty corpus
+    that still constructed an index would download a model in order to describe
+    nothing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.faiss = FakeFaiss().install(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        # Beside the corpus, not inside it — see EmbeddingModelIdentityTests.
+        self.corpus = os.path.join(self.tmp.name, "curriculum")
+        os.makedirs(self.corpus)
+        index = rag.default_index
+        index.index_path = os.path.join(self.tmp.name, "i.faiss")
+        index.docs_path = rag.sidecar_path_for(index.index_path)
+        index.curriculum_path = self.corpus
+
+    def test_ntotal_is_zero_without_building_an_index(self):
+        self.assertEqual(rag.default_index.ntotal, 0)
+        self.assertIsNone(rag.default_index.index)
+
+    def test_saving_an_empty_corpus_writes_no_vector_file(self):
+        rag.save_index({})
+
+        self.assertTrue(os.path.exists(rag.default_index.docs_path))
+        self.assertFalse(os.path.exists(rag.default_index.index_path))
+
+    def test_an_empty_corpus_round_trips(self):
+        rag.save_index({})
+
+        rag.load_index()
+
+        self.assertEqual(rag.default_index.documents, [])
+        self.assertIsNone(rag.default_index.index)
+
+    def test_an_empty_corpus_is_fresh_once_recorded(self):
+        """Otherwise every session start rebuilds a corpus with nothing in it."""
+        rag.save_index(rag.scan_manifest(self.corpus))
+
+        self.assertFalse(rag.is_index_stale(self.corpus))
 
 
 class RejectedIndexRebuildTests(RagTestCase):
