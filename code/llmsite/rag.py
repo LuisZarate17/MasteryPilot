@@ -28,8 +28,11 @@ no particular index: ``chunk_text``, ``_rel_source``, ``build_rag_system_message
 
 import os
 import re
-import pickle
 import json
+
+# Bumped when the sidecar's shape changes. An unrecognised version is treated
+# as unusable, which means "rebuild", not "crash".
+SIDECAR_VERSION = 1
 
 # ── Tuneable constants ────────────────────────────────────────────────────────
 CHUNK_SIZE    = 400   # target characters per chunk
@@ -46,8 +49,30 @@ dimension   = 384
 # These configure the default instance. A non-default RagIndex derives its own
 # paths from its curriculum directory.
 _BASE      = os.path.dirname(os.path.abspath(__file__))
+
+
+def sidecar_path_for(index_path):
+    """Metadata path for *index_path*.
+
+    splitext, not str.replace: replace substitutes every occurrence, so
+    RAG_INDEX_PATH=/srv/.faiss-data/c.faiss used to resolve into a directory
+    named _docs.json-data that does not exist, and any path without a .faiss
+    extension produced a sidecar path equal to the index path, so the two
+    writes silently destroyed each other.
+    """
+    return os.path.splitext(index_path)[0] + "_docs.json"
+
+
 INDEX_PATH = os.getenv("RAG_INDEX_PATH", os.path.join(_BASE, "curriculum.faiss"))
-DOCS_PATH  = INDEX_PATH.replace(".faiss", "_docs.pkl")
+DOCS_PATH  = sidecar_path_for(INDEX_PATH)
+
+
+class IndexUnusable(RuntimeError):
+    """A persisted index cannot be trusted and must be rebuilt.
+
+    Never fatal. Every raise site is paired with a rebuild — the cache is an
+    optimisation, and a corrupt one costs time, not correctness.
+    """
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,7 +165,7 @@ class RagIndex:
                 else os.path.normpath(curriculum_path) + ".faiss"
             )
         self.index_path = index_path
-        self.docs_path = docs_path or index_path.replace(".faiss", "_docs.pkl")
+        self.docs_path = docs_path or sidecar_path_for(index_path)
 
         self.documents = []   # list of {"text": str, "source": str, "chunk_idx": int}
 
@@ -184,24 +209,90 @@ class RagIndex:
         self.get_index().add(vecs)
         self.documents.extend(chunk_dicts)
 
+    def _sidecar_payload(self):
+        """The metadata written beside the vectors."""
+        return {
+            "version": SIDECAR_VERSION,
+            "ntotal": self.get_index().ntotal,
+            "documents": self.documents,
+        }
+
+    def _write_sidecar(self, payload):
+        """Write the sidecar atomically.
+
+        Written to a temporary file and renamed, because os.replace is atomic
+        on both POSIX and Windows. Without it, two workers rebuilding at once —
+        or a crash mid-write — leave a half-written file that parses to
+        nothing useful.
+        """
+        tmp = self.docs_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, self.docs_path)
+
+    def _read_sidecar(self):
+        try:
+            with open(self.docs_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except FileNotFoundError as exc:
+            raise IndexUnusable("metadata sidecar is missing") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # Also the path a pre-JSON pickle sidecar takes, if one is still
+            # sitting on disk under the old name.
+            raise IndexUnusable(f"metadata sidecar is unreadable: {exc}") from exc
+
+        if not isinstance(payload, dict) or payload.get("version") != SIDECAR_VERSION:
+            raise IndexUnusable(
+                f"metadata sidecar version {payload.get('version') if isinstance(payload, dict) else '?'} "
+                f"is not {SIDECAR_VERSION}"
+            )
+        return payload
+
     def save_index(self):
-        """Persist FAISS index and document metadata to disk."""
+        """Persist FAISS index and document metadata to disk.
+
+        Vectors first, metadata last. The sidecar is the commit record: if it
+        is absent or disagrees with the vectors, load_index refuses and the
+        corpus is rebuilt. That is what makes a crash between the two writes
+        cost a rebuild rather than silently misattributing chunks.
+        """
         import faiss
 
         idx = self.get_index()
         faiss.write_index(idx, self.index_path)
-        with open(self.docs_path, "wb") as f:
-            pickle.dump(self.documents, f)
+        self._write_sidecar(self._sidecar_payload())
         print(f"[RAG] Index saved: {idx.ntotal} vectors → {self.index_path}")
 
     def load_index(self):
-        """Load FAISS index and document metadata from disk."""
+        """Load FAISS index and document metadata from disk.
+
+        Raises IndexUnusable rather than loading a mismatched pair. retrieve()
+        looks documents up by the position FAISS returns, so an index and a
+        sidecar describing different corpora do not error — they answer with
+        the wrong text under the wrong source, which is worse.
+        """
         import faiss
 
-        self.index = faiss.read_index(self.index_path)
-        with open(self.docs_path, "rb") as f:
-            self.documents = pickle.load(f)
-        print(f"[RAG] Index loaded from disk: {self.index.ntotal} vectors")
+        payload = self._read_sidecar()
+
+        try:
+            index = faiss.read_index(self.index_path)
+        except Exception as exc:
+            raise IndexUnusable(f"vector index is unreadable: {exc}") from exc
+
+        documents = payload["documents"]
+        if index.ntotal != payload["ntotal"]:
+            raise IndexUnusable(
+                f"vector count {index.ntotal} does not match the recorded {payload['ntotal']}"
+            )
+        if len(documents) != index.ntotal:
+            raise IndexUnusable(
+                f"{len(documents)} documents against {index.ntotal} vectors"
+            )
+
+        self.index = index
+        self.documents = documents
+        print(f"[RAG] Index loaded from disk: {index.ntotal} vectors")
 
     def is_index_stale(self, curriculum_path):
         """Return True if the saved index is absent or older than any curriculum file."""
@@ -249,12 +340,20 @@ class RagIndex:
             return
         if self.is_index_stale(curriculum_path):
             print(f"[RAG] Index stale or absent — rebuilding from {curriculum_path} ...")
-            self.load_curriculum_folder(curriculum_path)
-            self._maybe_upgrade_to_ivf()
-            self.save_index()
-            print(f"[RAG] Curriculum indexed: {self.get_index().ntotal} chunks.")
+            self._rebuild(curriculum_path)
         else:
-            self.load_index()
+            try:
+                self.load_index()
+            except IndexUnusable as exc:
+                print(f"[RAG] Cached index rejected ({exc}) — rebuilding.")
+                self._rebuild(curriculum_path)
+
+    def _rebuild(self, curriculum_path):
+        """Index the corpus from scratch and persist the result."""
+        self.load_curriculum_folder(curriculum_path)
+        self._maybe_upgrade_to_ivf()
+        self.save_index()
+        print(f"[RAG] Curriculum indexed: {self.get_index().ntotal} chunks.")
 
     # ── Retrieval ────────────────────────────────────────────────────────────
 

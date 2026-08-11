@@ -10,6 +10,7 @@ scoring path) are exercised with a fake index rather than a real one; the
 arithmetic under test is the threshold and sentinel handling, not FAISS.
 """
 
+import json
 import os
 import tempfile
 
@@ -172,6 +173,209 @@ class IndexStalenessTests(RagTestCase):
             self.write_doc(deep, "deep.txt", self.NEW)
 
             self.assertTrue(rag.is_index_stale(curriculum))
+
+
+class SidecarPathTests(RagTestCase):
+    """str.replace substitutes every occurrence; splitext does not."""
+
+    def test_a_dot_faiss_directory_does_not_get_rewritten(self):
+        """RAG_INDEX_PATH pointing into a .faiss-named directory used to break.
+
+        The old derivation rewrote the directory too, aiming the sidecar at
+        /srv/_docs.json-data/, which does not exist.
+        """
+        derived = rag.sidecar_path_for(os.path.join(os.sep, "srv", ".faiss-data", "c.faiss"))
+
+        self.assertEqual(
+            derived, os.path.join(os.sep, "srv", ".faiss-data", "c_docs.json")
+        )
+
+    def test_an_extensionless_path_still_gets_a_distinct_sidecar(self):
+        """Equal paths meant the two writes destroyed each other."""
+        index_path = os.path.join(os.sep, "data", "index")
+
+        self.assertNotEqual(rag.sidecar_path_for(index_path), index_path)
+
+    def test_the_sidecar_is_json_not_pickle(self):
+        self.assertTrue(rag.sidecar_path_for("a.faiss").endswith("_docs.json"))
+
+    def test_an_instance_derives_its_sidecar_from_its_index_path(self):
+        index = rag.RagIndex(index_path=os.path.join("tmp", "corpus.faiss"))
+
+        self.assertEqual(index.docs_path, os.path.join("tmp", "corpus_docs.json"))
+
+
+class FakeFaiss:
+    """Enough of faiss to exercise save/load without the real library."""
+
+    def __init__(self):
+        self.written = {}
+
+    def install(self, test):
+        import sys
+        import types
+
+        module = types.ModuleType("faiss")
+        module.write_index = lambda index, path: self.written.__setitem__(path, index)
+        module.read_index = self._read
+        module.normalize_L2 = lambda _v: None
+        sys.modules["faiss"] = module
+        test.addCleanup(sys.modules.pop, "faiss", None)
+        return self
+
+    def _read(self, path):
+        if path not in self.written:
+            raise RuntimeError(f"no such index: {path}")
+        return self.written[path]
+
+
+class CountingIndex:
+    def __init__(self, ntotal):
+        self.ntotal = ntotal
+
+
+class SidecarPersistenceTests(RagTestCase):
+    """The index and its metadata must not be able to drift apart.
+
+    retrieve() looks documents up by the position FAISS returns. An index and a
+    sidecar describing different corpora do not raise — they answer with the
+    wrong text attributed to the wrong source, which is the failure worth
+    engineering against.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.faiss = FakeFaiss().install(self)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        rag.default_index.index_path = os.path.join(self.tmp.name, "i.faiss")
+        rag.default_index.docs_path = rag.sidecar_path_for(rag.default_index.index_path)
+
+    def save(self, documents):
+        rag.default_index.documents = list(documents)
+        rag.default_index.index = CountingIndex(len(documents))
+        rag.save_index()
+
+    def test_documents_survive_a_save_and_load_round_trip(self):
+        documents = [
+            {"text": "Fractions divide a whole.", "source": "ch1.txt", "chunk_idx": 0},
+            {"text": "A ratio compares.", "source": "ch2.txt", "chunk_idx": 0},
+        ]
+        self.save(documents)
+        rag.default_index.documents = []
+
+        rag.load_index()
+
+        self.assertEqual(rag.default_index.documents, documents)
+
+    def test_the_sidecar_is_readable_json(self):
+        """A person debugging a bad index should be able to open the file."""
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+
+        with open(rag.default_index.docs_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+
+        self.assertEqual(payload["version"], rag.SIDECAR_VERSION)
+        self.assertEqual(payload["ntotal"], 1)
+        self.assertEqual(payload["documents"][0]["source"], "a.txt")
+
+    def test_unicode_survives_the_round_trip(self):
+        documents = [{"text": "A = πr² and c = √(a² + b²)", "source": "m.txt", "chunk_idx": 0}]
+        self.save(documents)
+        rag.default_index.documents = []
+
+        rag.load_index()
+
+        self.assertEqual(rag.default_index.documents, documents)
+
+    def test_no_temporary_file_is_left_behind(self):
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+
+        self.assertFalse(os.path.exists(rag.default_index.docs_path + ".tmp"))
+
+    def test_a_vector_count_disagreeing_with_the_sidecar_is_rejected(self):
+        """The shape a crash between the two writes leaves behind."""
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        # The index moved on; the sidecar still describes one vector.
+        self.faiss.written[rag.default_index.index_path] = CountingIndex(9)
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_a_document_count_disagreeing_with_the_vectors_is_rejected(self):
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        self._corrupt(lambda p: p.update(documents=[]))
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_a_missing_sidecar_is_rejected(self):
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        os.remove(rag.default_index.docs_path)
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_an_unparseable_sidecar_is_rejected_rather_than_raising_json_errors(self):
+        """Covers a leftover pickle sitting where JSON is expected."""
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        with open(rag.default_index.docs_path, "wb") as handle:
+            handle.write(b"\x80\x04\x95not json at all")
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_an_unrecognised_sidecar_version_is_rejected(self):
+        """A format change must cost a rebuild, never a misread."""
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        self._corrupt(lambda p: p.update(version=rag.SIDECAR_VERSION + 1))
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def test_an_unreadable_vector_file_is_rejected(self):
+        self.save([{"text": "body", "source": "a.txt", "chunk_idx": 0}])
+        self.faiss.written.clear()
+
+        with self.assertRaises(rag.IndexUnusable):
+            rag.load_index()
+
+    def _corrupt(self, mutate):
+        with open(rag.default_index.docs_path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+        mutate(payload)
+        with open(rag.default_index.docs_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+
+class RejectedIndexRebuildTests(RagTestCase):
+    """A cache that cannot be trusted costs time, never correctness."""
+
+    def setUp(self):
+        super().setUp()
+        self.calls = []
+        rag.default_index.is_index_stale = lambda _p: False
+        rag.default_index._rebuild = lambda p: self.calls.append("rebuild")
+
+    def test_a_rejected_cache_falls_back_to_a_rebuild(self):
+        rag.default_index.load_index = self._raise
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rag.ensure_curriculum_loaded(tmp)
+
+        self.assertEqual(self.calls, ["rebuild"])
+
+    def test_a_healthy_cache_is_not_rebuilt(self):
+        rag.default_index.load_index = lambda: self.calls.append("load")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            rag.ensure_curriculum_loaded(tmp)
+
+        self.assertEqual(self.calls, ["load"])
+
+    @staticmethod
+    def _raise():
+        raise rag.IndexUnusable("deliberately corrupt")
 
 
 class BuildSystemMessageTests(RagTestCase):

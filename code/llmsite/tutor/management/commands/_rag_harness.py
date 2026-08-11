@@ -82,7 +82,7 @@ def isolated_index(corpus_dir, chunk_size=None, chunk_overlap=None):
         index = rag.RagIndex(
             curriculum_path=corpus_dir,
             index_path=os.path.join(tmp, "eval.faiss"),
-            docs_path=os.path.join(tmp, "eval_docs.pkl"),
+            docs_path=os.path.join(tmp, "eval_docs.json"),
         )
         index.embedder = _shared_embedder(rag)
         index.load_curriculum_folder(corpus_dir)
