@@ -218,3 +218,69 @@ class EvictionTests(SimpleTestCase):
         index.ensure_curriculum_loaded(self.corpus)
 
         self.assertEqual(rebuilt, [])
+
+
+@unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)
+class HybridRetrievalTests(SimpleTestCase):
+    """Both legs, against real vectors.
+
+    The unit tests prove BM25 and rank fusion are arithmetically correct. What
+    they cannot show is that the combination beats either leg alone on real
+    embeddings, which is the claim the README makes.
+    """
+
+    LEXICAL = [
+        ("what is the discriminant", "quadratic_equations.txt"),
+        ("chlorophyll", "photosynthesis.txt"),
+        ("what is the Calvin cycle", "photosynthesis.txt"),
+        ("least common denominator", "fractions.txt"),
+        ("what is an accumulator variable", "python_loops.md"),
+    ]
+
+    def test_rare_term_queries_find_their_document(self):
+        """Exactly where a compressed embedding is least confident."""
+        with isolated_index(EVAL_CORPUS) as index:
+            for query, expected in self.LEXICAL:
+                with self.subTest(query=query):
+                    hits = index.retrieve(query)
+
+                    self.assertTrue(hits, f"{query!r} returned nothing")
+                    self.assertIn(expected, {h["source"].split("/")[0] for h in hits})
+
+    def test_paraphrases_still_work(self):
+        """Adding a lexical leg must not cost the semantic one."""
+        cases = [
+            ("how do plants make food from sunlight", "photosynthesis.txt"),
+            ("what is the bottom number of a fraction called", "fractions.txt"),
+            ("how do I repeat something when I do not know how many times", "python_loops.md"),
+        ]
+        with isolated_index(EVAL_CORPUS) as index:
+            for query, expected in cases:
+                with self.subTest(query=query):
+                    hits = index.retrieve(query)
+
+                    self.assertTrue(hits, f"{query!r} returned nothing")
+                    self.assertIn(expected, {h["source"].split("/")[0] for h in hits})
+
+    def test_off_topic_questions_still_come_back_empty(self):
+        """The dense gate has to survive the sparse leg being added."""
+        with isolated_index(EVAL_CORPUS) as index:
+            for query in ("what is the capital of France", "how do I reset my password"):
+                with self.subTest(query=query):
+                    self.assertEqual(index.retrieve(query), [])
+
+    def test_code_inside_fenced_blocks_is_retrievable(self):
+        """It was deleted during ingestion, so these could never have matched."""
+        with isolated_index(EVAL_CORPUS) as index:
+            hits = index.retrieve("how do I use range to loop from 1 to 10")
+
+            self.assertIn("python_loops.md", {h["source"].split("/")[0] for h in hits})
+
+    def test_every_hit_carries_a_fused_score(self):
+        with isolated_index(EVAL_CORPUS) as index:
+            hits = index.retrieve("what is the discriminant")
+
+            self.assertTrue(all("score" in hit for hit in hits))
+            self.assertEqual(
+                [h["score"] for h in hits], sorted((h["score"] for h in hits), reverse=True)
+            )

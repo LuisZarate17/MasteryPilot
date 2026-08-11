@@ -26,9 +26,10 @@ Pure functions stay at module level, because they hold no state and belong to
 no particular index: ``chunk_text``, ``_rel_source``, ``build_rag_system_message``.
 """
 
+import json
+import math
 import os
 import re
-import json
 
 # Bumped when the sidecar's shape changes. An unrecognised version is treated
 # as unusable, which means "rebuild", not "crash".
@@ -43,7 +44,11 @@ SIDECAR_VERSION = 2
 CHUNK_SIZE    = 900   # target characters per chunk
 CHUNK_OVERLAP = 180   # characters carried forward into the next chunk
 MIN_CHUNK_BUDGET = 120  # floor, so a deep heading path cannot starve the text
-TOP_K         = 5     # candidates retrieved before threshold filtering
+TOP_K         = 5     # chunks handed to the model
+# Each leg proposes more candidates than we finally keep, so a passage
+# ranked seventh by one ranker and second by the other can still win.
+CANDIDATE_MULTIPLIER = 4
+MIN_CANDIDATES       = 20
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
 # Above this many chunks, swap exact search for approximate IVF. Raised from
 # 1000: at that size nlist = min(100, n // 10) gave 100 centroids over 1000
@@ -359,6 +364,103 @@ EXTRACTORS = {
 }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Sparse retrieval
+#
+# Dense embeddings compress rare terms badly. A student asking about "the
+# discriminant" or "chloroplast" or "**kwargs" is asking a lexical question,
+# and MiniLM's similarity space is at its weakest exactly there — the term that
+# makes the question specific is the term the model is least sure about.
+#
+# BM25 is term-frequency arithmetic over documents already in memory. It needs
+# no model and no new dependency, which is also why — unlike the dense leg —
+# every line of it is testable on the core install.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+
+BM25_K1 = 1.5   # term-frequency saturation: how fast repetition stops helping
+BM25_B  = 0.75  # length normalisation: how much a long chunk is penalised
+RRF_K   = 60    # rank-fusion damping, the value the original RRF paper used
+
+
+def tokenize(text):
+    """Lowercase alphanumeric runs. No stoplist — IDF handles common words."""
+    return _TOKEN.findall(text.lower())
+
+
+class BM25:
+    """Okapi BM25 over a list of chunk dicts."""
+
+    def __init__(self, documents):
+        self.doc_count = len(documents)
+        self.lengths = []
+        self.postings = {}   # term -> [(document index, term frequency)]
+        self.doc_freq = {}
+
+        for index, document in enumerate(documents):
+            counts = {}
+            tokens = tokenize(document.get("text", ""))
+            for token in tokens:
+                counts[token] = counts.get(token, 0) + 1
+            self.lengths.append(len(tokens))
+            for term, frequency in counts.items():
+                self.postings.setdefault(term, []).append((index, frequency))
+                self.doc_freq[term] = self.doc_freq.get(term, 0) + 1
+
+        self.avg_length = (sum(self.lengths) / self.doc_count) if self.doc_count else 0.0
+
+    def idf(self, term):
+        """Rarer terms weigh more. Absent terms weigh nothing."""
+        df = self.doc_freq.get(term, 0)
+        if not df:
+            return 0.0
+        return math.log(1 + (self.doc_count - df + 0.5) / (df + 0.5))
+
+    def search(self, query, limit):
+        """Return [(document index, score)], best first, score > 0 only.
+
+        A query sharing no term with the corpus scores nothing at all, which is
+        what lets an off-topic question come back empty rather than dragging up
+        whatever happened to be nearest.
+        """
+        if not self.doc_count or not self.avg_length:
+            return []
+
+        scores = {}
+        for term in set(tokenize(query)):
+            postings = self.postings.get(term)
+            if not postings:
+                continue
+            weight = self.idf(term)
+            for index, frequency in postings:
+                norm = 1 - BM25_B + BM25_B * self.lengths[index] / self.avg_length
+                scores[index] = scores.get(index, 0.0) + (
+                    weight * frequency * (BM25_K1 + 1) / (frequency + BM25_K1 * norm)
+                )
+
+        ranked = sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
+        return ranked[:limit]
+
+
+def reciprocal_rank_fusion(rankings, k=RRF_K):
+    """Combine ranked lists of document indices into one ordering.
+
+    Fuses on rank, not score, deliberately. Cosine similarity and BM25 live on
+    different scales with different distributions, and mapping them onto a
+    common scale means knowing both — which changes with every corpus and every
+    model. Ranks are comparable by construction, and a document both rankers
+    like beats one that only a single ranker put first.
+
+    Returns [(document index, fused score)], best first.
+    """
+    fused = {}
+    for ranking in rankings:
+        for rank, index in enumerate(ranking):
+            fused[index] = fused.get(index, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(fused.items(), key=lambda pair: (-pair[1], pair[0]))
+
+
 def build_rag_system_message(chunks):
     """Format retrieved chunks as a system-message string with source attribution."""
     if not chunks:
@@ -409,6 +511,9 @@ class RagIndex:
         self.embedder = None
         self.index = None
 
+        # Sparse index, rebuilt lazily whenever the corpus changes.
+        self._bm25 = None
+
         # Manifest of the corpus this index currently holds, or None when
         # nothing is loaded. Comparing it against a fresh scan is what makes a
         # repeat load cheap and a changed corpus visible.
@@ -457,6 +562,7 @@ class RagIndex:
         faiss.normalize_L2(vecs)
         self.get_index().add(vecs)
         self.documents.extend(chunk_dicts)
+        self._bm25 = None   # the corpus changed; term statistics with it
 
     @property
     def ntotal(self):
@@ -548,6 +654,7 @@ class RagIndex:
             # Nothing was indexed, so there is no vector file to read.
             self.index = None
             self.documents = []
+            self._bm25 = None
             print("[RAG] Index loaded from disk: empty corpus")
             return
 
@@ -567,6 +674,7 @@ class RagIndex:
 
         self.index = index
         self.documents = documents
+        self._bm25 = None
         # Taken from the file, so reopening an index never has to load a model
         # just to learn how wide its vectors are.
         self.dimension = payload.get("dimension") or index.d
@@ -729,6 +837,7 @@ class RagIndex:
 
         self.documents = []
         self.index = None
+        self._bm25 = None
 
         self.load_curriculum_folder(curriculum_path)
         self._maybe_upgrade_to_ivf()
@@ -738,26 +847,74 @@ class RagIndex:
 
     # ── Retrieval ────────────────────────────────────────────────────────────
 
-    def retrieve(self, query, top_k=TOP_K, min_score=MIN_SCORE):
-        """
-        Return chunk dicts relevant to *query*.
-        Chunks with cosine similarity < min_score are dropped silently.
-        Returns an empty list when nothing relevant exists.
-        """
-        if not self.documents:
-            return []
+    def get_bm25(self):
+        """The sparse index, rebuilt whenever the corpus changes."""
+        if self._bm25 is None:
+            self._bm25 = BM25(self.documents)
+        return self._bm25
+
+    def dense_search(self, query, limit, min_score=MIN_SCORE):
+        """Cosine nearest neighbours. Returns [(document index, similarity)]."""
         import faiss
 
         query_vec = self.get_embedder().encode([query], convert_to_numpy=True).astype("float32")
         faiss.normalize_L2(query_vec)
-        k = min(top_k, len(self.documents))
+        k = min(limit, len(self.documents))
         scores, indices = self.get_index().search(query_vec, k)
-        results = []
-        for score, i in zip(scores[0], indices[0]):
-            if i < 0:
+
+        found = []
+        for score, index in zip(scores[0], indices[0]):
+            if index < 0:          # FAISS pads short result sets with -1
                 continue
             if float(score) >= min_score:
-                results.append(self.documents[i])
+                found.append((int(index), float(score)))
+        return found
+
+    def retrieve(self, query, top_k=TOP_K, min_score=MIN_SCORE):
+        """
+        Return chunk dicts relevant to *query*, best first, each with a score.
+
+        Hybrid: a dense leg for meaning and a sparse leg for words, fused on
+        rank. Dense retrieval alone misses exact-term questions — "what is the
+        discriminant" turns on one rare word, and that is the word a compressed
+        embedding is least sure about. Sparse alone misses paraphrase, which is
+        how students actually ask.
+
+        Both legs contribute candidates from a pool wider than top_k, because a
+        passage ranked seventh by one ranker and second by the other should be
+        able to win, and it cannot if the pool is cut to five first.
+
+        Returns an empty list when nothing relevant exists: the dense leg is
+        floored at min_score and the sparse leg scores nothing for a query that
+        shares no term with the corpus.
+        """
+        if not self.documents:
+            return []
+
+        pool = max(top_k * CANDIDATE_MULTIPLIER, MIN_CANDIDATES)
+
+        dense = self.dense_search(query, pool, min_score)
+        if not dense:
+            # The dense leg decides *whether* the corpus has an answer; the two
+            # legs together decide *which* passages. Sparse matching cannot make
+            # that first call: "what is the capital of France" shares "of" with
+            # the curriculum, and BM25 has no way to know that overlap means
+            # nothing. Without this gate, every off-topic question would come
+            # back with whatever stopwords it happened to collide with.
+            return []
+
+        sparse = self.get_bm25().search(query, pool)
+
+        fused = reciprocal_rank_fusion(
+            [[index for index, _ in dense], [index for index, _ in sparse]]
+        )
+
+        results = []
+        for index, score in fused[:top_k]:
+            # A copy: the stored chunk must not gain a score from being found.
+            chunk = dict(self.documents[index])
+            chunk["score"] = score
+            results.append(chunk)
         return results
 
     # ── File loaders ─────────────────────────────────────────────────────────

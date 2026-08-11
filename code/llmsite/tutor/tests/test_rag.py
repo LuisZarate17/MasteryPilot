@@ -819,6 +819,137 @@ class FakeEmbedder:
         return _Vec()
 
 
+def doc(text, source="a.txt", idx=0):
+    return {"text": text, "source": source, "chunk_idx": idx}
+
+
+class TokenizeTests(RagTestCase):
+    def test_case_is_folded(self):
+        self.assertEqual(rag.tokenize("Discriminant DISCRIMINANT"), ["discriminant", "discriminant"])
+
+    def test_punctuation_separates_terms(self):
+        self.assertEqual(rag.tokenize("range(1, 11);"), ["range", "1", "11"])
+
+    def test_numbers_are_kept(self):
+        """Curriculum is full of them, and "1998" is exactly the kind of term
+        a dense embedding smears away."""
+        self.assertIn("1998", rag.tokenize("the 1998 world cup"))
+
+    def test_empty_text_yields_no_terms(self):
+        self.assertEqual(rag.tokenize("   "), [])
+
+
+class BM25Tests(RagTestCase):
+    """Term-frequency arithmetic — no model involved, so fully checkable here."""
+
+    CORPUS = [
+        doc("The discriminant tells you how many real roots a quadratic has."),
+        doc("A fraction has a numerator above the line and a denominator below."),
+        doc("Photosynthesis happens in the chloroplast, which contains chlorophyll."),
+        doc("The quadratic formula gives the roots of a quadratic equation."),
+    ]
+
+    def setUp(self):
+        super().setUp()
+        self.bm25 = rag.BM25(self.CORPUS)
+
+    def top(self, query):
+        ranked = self.bm25.search(query, limit=5)
+        return ranked[0][0] if ranked else None
+
+    def test_a_rare_term_finds_its_document(self):
+        self.assertEqual(self.top("discriminant"), 0)
+        self.assertEqual(self.top("chlorophyll"), 2)
+
+    def test_a_query_sharing_no_terms_at_all_scores_nothing(self):
+        self.assertEqual(self.bm25.search("zebra xylophone", limit=5), [])
+
+    def test_stopword_overlap_alone_still_produces_a_match(self):
+        """Which is why sparse retrieval cannot be trusted to reject.
+
+        "what is the capital of France" shares "of" and "the" with the
+        curriculum, and BM25 has no way to know that overlap means nothing.
+        Rejecting off-topic questions is the dense leg's job — see
+        RetrieveTests.test_an_off_topic_query_is_rejected_before_the_sparse_leg.
+        """
+        self.assertTrue(self.bm25.search("what is the capital of France", limit=5))
+
+    def test_a_term_in_every_document_carries_little_weight(self):
+        """IDF, not a stoplist. 'the' appears everywhere and should decide nothing."""
+        self.assertLess(self.bm25.idf("the"), self.bm25.idf("discriminant"))
+
+    def test_an_absent_term_has_no_weight_at_all(self):
+        self.assertEqual(self.bm25.idf("chloroplasts_of_mars"), 0.0)
+
+    def test_repetition_saturates(self):
+        """Twice the mentions must not mean twice the score, or keyword
+        stuffing beats a genuinely better passage."""
+        bm25 = rag.BM25([doc("roots"), doc("roots roots roots roots roots roots")])
+
+        scores = dict(bm25.search("roots", limit=2))
+
+        self.assertLess(scores[1], scores[0] * 6)
+        self.assertGreater(scores[1], scores[0])
+
+    def test_a_shorter_document_wins_on_equal_term_counts(self):
+        """Length normalisation: one mention in a sentence beats one in an essay."""
+        bm25 = rag.BM25([doc("discriminant"), doc("discriminant " + "filler " * 60)])
+
+        self.assertEqual(bm25.search("discriminant", limit=2)[0][0], 0)
+
+    def test_results_come_back_best_first(self):
+        ranked = self.bm25.search("quadratic roots", limit=5)
+
+        self.assertEqual([score for _, score in ranked], sorted((s for _, s in ranked), reverse=True))
+
+    def test_the_limit_is_respected(self):
+        self.assertLessEqual(len(self.bm25.search("the", limit=2)), 2)
+
+    def test_ties_break_deterministically(self):
+        bm25 = rag.BM25([doc("same words here"), doc("same words here")])
+
+        self.assertEqual([i for i, _ in bm25.search("same words", limit=2)], [0, 1])
+
+    def test_an_empty_corpus_searches_safely(self):
+        self.assertEqual(rag.BM25([]).search("anything", limit=5), [])
+
+
+class ReciprocalRankFusionTests(RagTestCase):
+    def test_agreement_between_rankers_beats_a_single_first_place(self):
+        """The whole point: a passage both legs like outranks one only one found."""
+        fused = rag.reciprocal_rank_fusion([[9, 1], [1, 9]])
+
+        self.assertEqual(fused[0][0], 1)
+
+    def test_a_document_only_one_ranker_found_still_appears(self):
+        """Otherwise the sparse leg could never rescue what dense missed."""
+        fused = dict(rag.reciprocal_rank_fusion([[1, 2], [7]]))
+
+        self.assertIn(7, fused)
+
+    def test_rank_decides_rather_than_score_scale(self):
+        """Cosine and BM25 have no common scale; only positions are comparable."""
+        fused = rag.reciprocal_rank_fusion([[5, 6, 7]])
+
+        self.assertEqual([index for index, _ in fused], [5, 6, 7])
+
+    def test_later_ranks_contribute_less(self):
+        first, second = rag.reciprocal_rank_fusion([[1, 2]])
+
+        self.assertGreater(first[1], second[1])
+
+    def test_an_empty_ranking_contributes_nothing(self):
+        self.assertEqual(rag.reciprocal_rank_fusion([[], [3]]), [(3, 1 / (rag.RRF_K + 1))])
+
+    def test_no_rankings_at_all_is_empty(self):
+        self.assertEqual(rag.reciprocal_rank_fusion([]), [])
+
+    def test_ties_break_deterministically(self):
+        fused = rag.reciprocal_rank_fusion([[2], [1]])
+
+        self.assertEqual([index for index, _ in fused], [1, 2])
+
+
 class RetrieveTests(RagTestCase):
     def install_fakes(self, scores, indices):
         rag.default_index.embedder = FakeEmbedder()
@@ -831,30 +962,77 @@ class RetrieveTests(RagTestCase):
         sys.modules["faiss"] = fake_faiss
         self.addCleanup(sys.modules.pop, "faiss", None)
 
+    def texts(self, query="q"):
+        return [chunk["text"] for chunk in rag.retrieve(query)]
+
     def test_empty_corpus_returns_nothing_without_touching_the_model(self):
         """The early return runs before any heavy call — no fakes needed."""
         self.assertEqual(rag.retrieve("anything"), [])
 
     def test_chunks_below_the_score_floor_are_dropped(self):
-        rag.default_index.documents = [{"text": "keep"}, {"text": "drop"}]
+        rag.default_index.documents = [doc("keep"), doc("drop")]
         self.install_fakes([rag.MIN_SCORE + 0.1, rag.MIN_SCORE - 0.1], [0, 1])
 
-        results = rag.retrieve("q")
-
-        self.assertEqual(results, [{"text": "keep"}])
+        self.assertEqual(self.texts(), ["keep"])
 
     def test_a_score_exactly_at_the_floor_is_kept(self):
-        rag.default_index.documents = [{"text": "edge"}]
+        rag.default_index.documents = [doc("edge")]
         self.install_fakes([rag.MIN_SCORE], [0])
 
-        self.assertEqual(rag.retrieve("q"), [{"text": "edge"}])
+        self.assertEqual(self.texts(), ["edge"])
 
     def test_the_negative_one_sentinel_is_skipped(self):
         """FAISS pads short result sets with -1."""
-        rag.default_index.documents = [{"text": "real"}]
+        rag.default_index.documents = [doc("real")]
         self.install_fakes([0.9, 0.9], [0, -1])
 
-        self.assertEqual(rag.retrieve("q"), [{"text": "real"}])
+        self.assertEqual(self.texts(), ["real"])
+
+    def test_an_off_topic_query_is_rejected_before_the_sparse_leg(self):
+        """The dense leg judges whether the corpus has an answer at all.
+
+        BM25 will happily match "of" and "the", so without this gate every
+        off-topic question would come back carrying whatever stopwords it
+        collided with. Here the corpus shares a word with the query and the
+        dense leg still says no.
+        """
+        rag.default_index.documents = [doc("the numerator sits above the line")]
+        self.install_fakes([rag.MIN_SCORE - 0.2], [0])
+
+        self.assertEqual(rag.retrieve("what is the capital of France"), [])
+
+    def test_results_carry_a_score(self):
+        """rag_eval measures separation with it, and rag_check prints it."""
+        rag.default_index.documents = [doc("keep")]
+        self.install_fakes([0.9], [0])
+
+        self.assertIn("score", rag.retrieve("q")[0])
+
+    def test_the_stored_chunk_is_not_mutated_by_being_found(self):
+        """Retrieval must not write a score back into the corpus."""
+        rag.default_index.documents = [doc("keep")]
+        self.install_fakes([0.9], [0])
+
+        rag.retrieve("q")
+
+        self.assertNotIn("score", rag.default_index.documents[0])
+
+    def test_a_lexical_match_the_dense_leg_ranked_last_can_win(self):
+        """The point of the sparse leg: dense ordering is not the final word."""
+        rag.default_index.documents = [
+            doc("a passage about fractions and denominators"),
+            doc("a passage about the discriminant of a quadratic"),
+        ]
+        # Dense prefers document 0; the query's rare term is only in document 1.
+        self.install_fakes([0.9, 0.5], [0, 1])
+
+        self.assertEqual(self.texts("discriminant")[0], rag.default_index.documents[1]["text"])
+
+    def test_no_more_than_top_k_come_back(self):
+        rag.default_index.documents = [doc(f"passage {i}") for i in range(20)]
+        self.install_fakes([0.9] * 20, list(range(20)))
+
+        self.assertLessEqual(len(rag.retrieve("passage", top_k=3)), 3)
 
 
 class EnsureCurriculumLoadedTests(RagTestCase):
