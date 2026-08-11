@@ -16,11 +16,18 @@ turn a model upgrade into a test failure for no reason.
 """
 
 import os
+import shutil
+import tempfile
 import unittest
 
 from django.test import SimpleTestCase
 
-from tutor.management.commands._rag_harness import EVAL_CORPUS, isolated_index
+import rag
+from tutor.management.commands._rag_harness import (
+    EVAL_CORPUS,
+    _shared_embedder,
+    isolated_index,
+)
 
 try:
     import faiss  # noqa: F401
@@ -116,3 +123,98 @@ class PersistenceRoundTripTests(SimpleTestCase):
 
             self.assertEqual(len(index.documents), expected)
             self.assertEqual(index.get_index().ntotal, expected)
+
+
+@unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)
+class EvictionTests(SimpleTestCase):
+    """Deleted curriculum must stop reaching students.
+
+    The defect this phase exists for, checked against a real index rather than
+    a manifest comparison. The unit tests prove staleness is *detected*; these
+    prove the detection actually results in the content being gone.
+    """
+
+    QUERY = "how do plants convert sunlight into food"
+    DOOMED = "photosynthesis.txt"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="rag-eviction-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.corpus = os.path.join(self.tmp, "curriculum")
+        shutil.copytree(EVAL_CORPUS, self.corpus)
+
+    def build(self):
+        """A fresh RagIndex over the corpus, sharing the process-wide embedder.
+
+        Constructing a new one each time is what makes the second call in
+        test_a_deletion_survives_a_restart a genuine cold start.
+        """
+        index = rag.RagIndex(
+            curriculum_path=self.corpus,
+            index_path=os.path.join(self.tmp, "i.faiss"),
+        )
+        index.embedder = _shared_embedder(rag)
+        index.ensure_curriculum_loaded(self.corpus)
+        return index
+
+    def sources(self, index):
+        return {doc["source"].split("/")[0] for doc in index.documents}
+
+    def test_a_deleted_document_stops_being_retrieved(self):
+        index = self.build()
+        self.assertIn(
+            self.DOOMED,
+            {h["source"] for h in index.retrieve(self.QUERY)},
+            "the document was not retrievable to begin with — the test proves nothing",
+        )
+
+        os.remove(os.path.join(self.corpus, self.DOOMED))
+        index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertNotIn(self.DOOMED, {h["source"] for h in index.retrieve(self.QUERY)})
+        self.assertNotIn(self.DOOMED, self.sources(index))
+
+    def test_a_deletion_survives_a_restart(self):
+        """mtime staleness could not see a deletion, so a restart did not help."""
+        self.build()
+
+        os.remove(os.path.join(self.corpus, self.DOOMED))
+
+        self.assertNotIn(self.DOOMED, self.sources(self.build()))
+
+    def test_the_surviving_documents_are_still_retrievable(self):
+        """Eviction rebuilds the corpus, so it has to put everything else back."""
+        index = self.build()
+        os.remove(os.path.join(self.corpus, self.DOOMED))
+
+        index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertEqual(
+            self.sources(index), set(os.listdir(self.corpus)) - {self.DOOMED}
+        )
+        self.assertTrue(index.retrieve("what is the discriminant"))
+
+    def test_an_added_document_becomes_retrievable(self):
+        index = self.build()
+        with open(os.path.join(self.corpus, "tides.txt"), "w", encoding="utf-8") as handle:
+            handle.write(
+                "Tides are the rise and fall of sea level caused by the gravitational "
+                "pull of the moon and the sun on the oceans of the earth."
+            )
+
+        index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertIn("tides.txt", self.sources(index))
+        self.assertIn(
+            "tides.txt", {h["source"] for h in index.retrieve("what causes the tides")}
+        )
+
+    def test_an_unchanged_corpus_is_not_rebuilt(self):
+        """Re-checking on every call must stay cheap, or this becomes a regression."""
+        index = self.build()
+        rebuilt = []
+        index._rebuild = lambda *a, **k: rebuilt.append(1)
+
+        index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertEqual(rebuilt, [])

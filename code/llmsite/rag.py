@@ -173,8 +173,10 @@ class RagIndex:
         self.embedder = None
         self.index = None
 
-        # Guard against loading the curriculum more than once per process
-        self._curriculum_loaded = False
+        # Manifest of the corpus this index currently holds, or None when
+        # nothing is loaded. Comparing it against a fresh scan is what makes a
+        # repeat load cheap and a changed corpus visible.
+        self._loaded_manifest = None
 
     # ── Lazily built singletons ──────────────────────────────────────────────
 
@@ -209,11 +211,13 @@ class RagIndex:
         self.get_index().add(vecs)
         self.documents.extend(chunk_dicts)
 
-    def _sidecar_payload(self):
+    def _sidecar_payload(self, manifest):
         """The metadata written beside the vectors."""
         return {
             "version": SIDECAR_VERSION,
             "ntotal": self.get_index().ntotal,
+            "corpus": self._corpus_key(self.curriculum_path),
+            "manifest": manifest,
             "documents": self.documents,
         }
 
@@ -248,7 +252,7 @@ class RagIndex:
             )
         return payload
 
-    def save_index(self):
+    def save_index(self, manifest=None):
         """Persist FAISS index and document metadata to disk.
 
         Vectors first, metadata last. The sidecar is the commit record: if it
@@ -260,7 +264,7 @@ class RagIndex:
 
         idx = self.get_index()
         faiss.write_index(idx, self.index_path)
-        self._write_sidecar(self._sidecar_payload())
+        self._write_sidecar(self._sidecar_payload(manifest if manifest is not None else {}))
         print(f"[RAG] Index saved: {idx.ntotal} vectors → {self.index_path}")
 
     def load_index(self):
@@ -294,16 +298,65 @@ class RagIndex:
         self.documents = documents
         print(f"[RAG] Index loaded from disk: {index.ntotal} vectors")
 
-    def is_index_stale(self, curriculum_path):
-        """Return True if the saved index is absent or older than any curriculum file."""
-        if not os.path.exists(self.index_path) or not os.path.exists(self.docs_path):
-            return True
-        index_mtime = os.path.getmtime(self.index_path)
+    # ── Corpus fingerprinting ────────────────────────────────────────────────
+
+    @staticmethod
+    def _corpus_key(curriculum_path):
+        """Stable identity for a corpus directory."""
+        if not curriculum_path:
+            return None
+        return os.path.normcase(os.path.abspath(curriculum_path))
+
+    @staticmethod
+    def scan_manifest(curriculum_path):
+        """Describe every file under *curriculum_path* as {relpath: [mtime, size]}.
+
+        Separators are normalised to "/" so a manifest written on Windows
+        compares equal to the same corpus read on Linux.
+        """
+        manifest = {}
         for root, _dirs, files in os.walk(curriculum_path):
             for fname in files:
-                if os.path.getmtime(os.path.join(root, fname)) > index_mtime:
-                    return True
-        return False
+                full = os.path.join(root, fname)
+                try:
+                    stat = os.stat(full)
+                except OSError:
+                    # Vanished between listing and stat; the next scan settles it.
+                    continue
+                rel = os.path.relpath(full, curriculum_path).replace(os.sep, "/")
+                manifest[rel] = [stat.st_mtime, stat.st_size]
+        return manifest
+
+    def _saved_fingerprint(self):
+        """(corpus key, manifest) recorded in the sidecar, or (None, None)."""
+        if not os.path.exists(self.index_path):
+            return None, None
+        try:
+            payload = self._read_sidecar()
+        except IndexUnusable:
+            return None, None
+        return payload.get("corpus"), payload.get("manifest")
+
+    def is_index_stale(self, curriculum_path, manifest=None):
+        """Return True unless the saved index describes exactly this corpus.
+
+        Compares a manifest of every file, not mtimes against the index. The
+        old check asked "is any file newer than the index", which cannot express
+        a file that no longer exists — so deleting curriculum through the
+        dashboard left its chunks being retrieved and quoted to students
+        forever, across restarts, with no way to stop it short of deleting the
+        index by hand.
+
+        A set comparison catches all three cases: added, modified, and removed.
+        """
+        saved_corpus, saved_manifest = self._saved_fingerprint()
+        if saved_manifest is None:
+            return True
+        if saved_corpus != self._corpus_key(curriculum_path):
+            return True
+        if manifest is None:
+            manifest = self.scan_manifest(curriculum_path)
+        return saved_manifest != manifest
 
     def _maybe_upgrade_to_ivf(self):
         """If corpus exceeds IVF_THRESHOLD, replace flat index with approximate IVF."""
@@ -326,34 +379,79 @@ class RagIndex:
         print(f"[RAG] IVF index ready (nlist={nlist}, nprobe=10).")
 
     def ensure_curriculum_loaded(self, curriculum_path=None):
-        """
-        Load curriculum into the index exactly once per process.
-        Uses cached index file when fresh; rebuilds and saves when stale or absent.
+        """Make this index reflect the corpus on disk, right now.
+
+        Re-checks on every call rather than latching after the first. The latch
+        it replaces had two problems. It was set *before* indexing ran, on the
+        reasoning that this prevented re-entry on error — so a single
+        unreadable PDF left the process serving a half-built index for its
+        entire lifetime, silently and with no log line. And because it never
+        cleared, a curriculum change could not take effect without a restart,
+        which is the other half of why deleted content kept being served.
+
+        The cost of re-checking is one os.walk plus a stat per file. This runs
+        when a chat session opens, not per message, so that is not a hot path.
         """
         curriculum_path = curriculum_path or self.curriculum_path
-        if self._curriculum_loaded:
-            return
-        self._curriculum_loaded = True   # set early to prevent re-entry on error
         self.curriculum_path = curriculum_path
-        if not os.path.exists(curriculum_path):
+
+        if not curriculum_path or not os.path.exists(curriculum_path):
             print("[RAG] No curriculum folder found. Skipping.")
             return
-        if self.is_index_stale(curriculum_path):
-            print(f"[RAG] Index stale or absent — rebuilding from {curriculum_path} ...")
-            self._rebuild(curriculum_path)
-        else:
+
+        current = self.scan_manifest(curriculum_path)
+
+        # Already serving exactly this corpus — nothing to do.
+        if self._loaded_manifest == current and self.documents:
+            return
+
+        if not self.is_index_stale(curriculum_path, current):
             try:
                 self.load_index()
+                self._loaded_manifest = current
+                return
             except IndexUnusable as exc:
                 print(f"[RAG] Cached index rejected ({exc}) — rebuilding.")
-                self._rebuild(curriculum_path)
 
-    def _rebuild(self, curriculum_path):
-        """Index the corpus from scratch and persist the result."""
+        print(f"[RAG] Curriculum changed or unindexed — rebuilding from {curriculum_path} ...")
+        self._rebuild(curriculum_path, current)
+
+    def invalidate(self):
+        """Forget what is loaded, so the next load re-reads the corpus.
+
+        Called when curriculum is uploaded or deleted. Strictly this is belt
+        and braces — ensure_curriculum_loaded re-scans anyway — but it makes
+        the coupling between the dashboard and the index explicit rather than
+        incidental.
+
+        Note the scope: this clears *this process*. Under multiple gunicorn
+        workers, the others pick the change up at their next session start.
+        """
+        self._loaded_manifest = None
+
+    def _rebuild(self, curriculum_path, manifest=None):
+        """Index the corpus from scratch and persist the result.
+
+        Resetting documents and index first is what evicts deleted content:
+        chunks are not removed one by one, the corpus is simply re-read, and
+        anything no longer on disk is no longer in it. That is deliberately
+        the dumb approach. Incremental removal means FAISS remove_ids, which
+        compacts and renumbers a flat index while `documents` is a parallel
+        Python list — and a desync there does not raise, it answers with the
+        wrong text under the wrong source. Rebuilding a pilot corpus takes
+        seconds and cannot get that wrong.
+        """
+        if manifest is None:
+            manifest = self.scan_manifest(curriculum_path)
+
+        self.documents = []
+        self.index = None
+
         self.load_curriculum_folder(curriculum_path)
         self._maybe_upgrade_to_ivf()
-        self.save_index()
-        print(f"[RAG] Curriculum indexed: {self.get_index().ntotal} chunks.")
+        self.save_index(manifest)
+        self._loaded_manifest = manifest
+        print(f"[RAG] Curriculum indexed: {len(self.documents)} chunks.")
 
     # ── Retrieval ────────────────────────────────────────────────────────────
 
@@ -500,8 +598,16 @@ def add_documents(chunk_dicts):
     return default_index.add_documents(chunk_dicts)
 
 
-def save_index():
-    return default_index.save_index()
+def save_index(manifest=None):
+    return default_index.save_index(manifest)
+
+
+def scan_manifest(curriculum_path):
+    return RagIndex.scan_manifest(curriculum_path)
+
+
+def invalidate():
+    return default_index.invalidate()
 
 
 def load_index():

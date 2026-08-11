@@ -99,80 +99,190 @@ class ChunkTextTests(RagTestCase):
 
 
 class IndexStalenessTests(RagTestCase):
-    """Timestamps are set explicitly throughout.
+    """Staleness is a manifest comparison, not an mtime race.
 
-    Writing the index and then the document and trusting wall-clock ordering is
-    flaky: these tests run in single-digit milliseconds and the filesystem
-    timestamp resolution is coarser than that, so both files land on the same
-    mtime and the strict `>` comparison goes the wrong way.
+    These tests changed with the mechanism, because they encoded the mechanism
+    — and the mechanism was the defect. The old check asked "is any curriculum
+    file newer than the index", which cannot express a file that no longer
+    exists, so a deleted document went on being retrieved forever.
+
+    Every original test's *intent* survives below: a missing index is stale, a
+    missing sidecar is stale, an unchanged corpus is fresh, a modified file is
+    stale, nested files count. What is gone is the timestamp stamping those
+    tests needed — the suite runs in single-digit milliseconds and filesystem
+    timestamp resolution is coarser, so index and document landed on the same
+    mtime and a strict `>` went the wrong way. A manifest has no such race.
+
+    What is new is the case that could not be written before: deletion.
     """
 
-    OLD = 1_000_000  # 1970
-    NEW = 2_000_000_000  # 2033
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.curriculum = os.path.join(self.tmp.name, "curriculum")
+        os.makedirs(self.curriculum)
 
-    def stamp(self, path, when):
-        os.utime(path, (when, when))
+        index = rag.default_index
+        index.index_path = os.path.join(self.tmp.name, "i.faiss")
+        index.docs_path = rag.sidecar_path_for(index.index_path)
+        index.curriculum_path = self.curriculum
 
-    def write_index(self, tmp, when):
-        rag.default_index.index_path = os.path.join(tmp, "i.faiss")
-        rag.default_index.docs_path = os.path.join(tmp, "i_docs.pkl")
-        for path in (rag.default_index.index_path, rag.default_index.docs_path):
-            with open(path, "w") as f:
-                f.write("x")
-            self.stamp(path, when)
-
-    def write_doc(self, folder, name, when):
+    def write_doc(self, name, content="content", folder=None):
+        folder = folder or self.curriculum
+        os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, name)
-        with open(path, "w") as f:
-            f.write("content")
-        self.stamp(path, when)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(content)
         return path
 
-    def test_missing_index_is_stale(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            rag.default_index.index_path = os.path.join(tmp, "absent.faiss")
-            rag.default_index.docs_path = os.path.join(tmp, "absent_docs.pkl")
+    def record_index(self):
+        """Persist an index describing the corpus exactly as it stands now."""
+        index = rag.default_index
+        with open(index.index_path, "w") as handle:
+            handle.write("vectors")
+        index._write_sidecar({
+            "version": rag.SIDECAR_VERSION,
+            "ntotal": 0,
+            "corpus": index._corpus_key(self.curriculum),
+            "manifest": rag.scan_manifest(self.curriculum),
+            "documents": [],
+        })
 
-            self.assertTrue(rag.is_index_stale(tmp))
+    # ── Intent carried over from the mtime era ───────────────────────────────
+
+    def test_missing_index_is_stale(self):
+        self.assertTrue(rag.is_index_stale(self.curriculum))
 
     def test_docs_sidecar_missing_is_stale(self):
         """Both halves must exist — an index without its metadata is useless."""
-        with tempfile.TemporaryDirectory() as tmp:
-            rag.default_index.index_path = os.path.join(tmp, "i.faiss")
-            rag.default_index.docs_path = os.path.join(tmp, "i_docs.pkl")
-            with open(rag.default_index.index_path, "w") as f:
-                f.write("x")
+        with open(rag.default_index.index_path, "w") as handle:
+            handle.write("vectors")
 
-            self.assertTrue(rag.is_index_stale(tmp))
+        self.assertTrue(rag.is_index_stale(self.curriculum))
 
-    def test_index_newer_than_every_file_is_fresh(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            curriculum = os.path.join(tmp, "curriculum")
-            os.makedirs(curriculum)
-            self.write_doc(curriculum, "a.txt", self.OLD)
-            self.write_index(tmp, self.NEW)
+    def test_an_unchanged_corpus_is_fresh(self):
+        self.write_doc("a.txt")
+        self.record_index()
 
-            self.assertFalse(rag.is_index_stale(curriculum))
+        self.assertFalse(rag.is_index_stale(self.curriculum))
 
-    def test_a_file_newer_than_the_index_is_stale(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            curriculum = os.path.join(tmp, "curriculum")
-            os.makedirs(curriculum)
-            self.write_index(tmp, self.OLD)
-            self.write_doc(curriculum, "a.txt", self.NEW)
+    def test_a_modified_file_is_stale(self):
+        self.write_doc("a.txt")
+        self.record_index()
+        self.write_doc("a.txt", content="content, revised and longer")
 
-            self.assertTrue(rag.is_index_stale(curriculum))
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    def test_a_file_edited_without_changing_its_size_is_stale(self):
+        """Size alone is not enough; the manifest records mtime too."""
+        path = self.write_doc("a.txt", content="aaaa")
+        self.record_index()
+        self.write_doc("a.txt", content="bbbb")
+        os.utime(path, (2_000_000_000, 2_000_000_000))
+
+        self.assertTrue(rag.is_index_stale(self.curriculum))
 
     def test_staleness_looks_all_the_way_down_the_tree(self):
         """Nested files count — this is what load_curriculum_folder must match."""
-        with tempfile.TemporaryDirectory() as tmp:
-            curriculum = os.path.join(tmp, "curriculum")
-            deep = os.path.join(curriculum, "unit1", "week2")
-            os.makedirs(deep)
-            self.write_index(tmp, self.OLD)
-            self.write_doc(deep, "deep.txt", self.NEW)
+        deep = os.path.join(self.curriculum, "unit1", "week2")
+        self.write_doc("deep.txt", folder=deep)
+        self.record_index()
+        self.write_doc("another.txt", folder=deep)
 
-            self.assertTrue(rag.is_index_stale(curriculum))
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    # ── The case the old mechanism could not express ─────────────────────────
+
+    def test_a_deleted_file_makes_the_index_stale(self):
+        """The defect. A district pulling a document could not make it stop.
+
+        mtime comparison only ever looks forward: nothing on disk is newer than
+        the index once a file is gone, so the index looked fresh and its chunks
+        kept being retrieved and quoted to students — across restarts, with no
+        way to stop it short of deleting the index by hand.
+        """
+        self.write_doc("keep.txt")
+        removed = self.write_doc("remove_me.txt")
+        self.record_index()
+
+        os.remove(removed)
+
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    def test_a_deleted_nested_file_makes_the_index_stale(self):
+        deep = os.path.join(self.curriculum, "unit1", "week2")
+        removed = self.write_doc("deep.txt", folder=deep)
+        self.record_index()
+
+        os.remove(removed)
+
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    def test_emptying_the_corpus_entirely_is_stale(self):
+        removed = self.write_doc("only.txt")
+        self.record_index()
+
+        os.remove(removed)
+
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    def test_an_added_file_is_stale(self):
+        self.write_doc("a.txt")
+        self.record_index()
+        self.write_doc("b.txt")
+
+        self.assertTrue(rag.is_index_stale(self.curriculum))
+
+    def test_an_index_built_from_a_different_directory_is_stale(self):
+        """Relative manifest keys could otherwise collide across corpora."""
+        self.write_doc("a.txt")
+        self.record_index()
+
+        other = os.path.join(self.tmp.name, "other")
+        os.makedirs(other)
+        with open(os.path.join(other, "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("content")
+
+        self.assertTrue(rag.is_index_stale(other))
+
+
+class ManifestTests(RagTestCase):
+    """The manifest itself: what it records and how it compares."""
+
+    def test_it_records_every_file_in_the_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "unit1"))
+            for rel in ("a.txt", os.path.join("unit1", "b.txt")):
+                with open(os.path.join(tmp, rel), "w", encoding="utf-8") as handle:
+                    handle.write("x")
+
+            manifest = rag.scan_manifest(tmp)
+
+            self.assertEqual(set(manifest), {"a.txt", "unit1/b.txt"})
+
+    def test_separators_are_normalised_so_platforms_agree(self):
+        """A manifest written on Windows must compare equal on Linux."""
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "unit1"))
+            with open(os.path.join(tmp, "unit1", "b.txt"), "w", encoding="utf-8") as handle:
+                handle.write("x")
+
+            self.assertIn("unit1/b.txt", rag.scan_manifest(tmp))
+            self.assertNotIn("\\", "".join(rag.scan_manifest(tmp)))
+
+    def test_an_empty_directory_yields_an_empty_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(rag.scan_manifest(tmp), {})
+
+    def test_it_survives_a_json_round_trip_unchanged(self):
+        """It is compared after being read back out of the sidecar."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "a.txt"), "w", encoding="utf-8") as handle:
+                handle.write("content")
+            manifest = rag.scan_manifest(tmp)
+
+            self.assertEqual(json.loads(json.dumps(manifest)), manifest)
 
 
 class SidecarPathTests(RagTestCase):
@@ -354,8 +464,8 @@ class RejectedIndexRebuildTests(RagTestCase):
     def setUp(self):
         super().setUp()
         self.calls = []
-        rag.default_index.is_index_stale = lambda _p: False
-        rag.default_index._rebuild = lambda p: self.calls.append("rebuild")
+        rag.default_index.is_index_stale = lambda *_a, **_k: False
+        rag.default_index._rebuild = lambda *_a, **_k: self.calls.append("rebuild")
 
     def test_a_rejected_cache_falls_back_to_a_rebuild(self):
         rag.default_index.load_index = self._raise
@@ -499,27 +609,70 @@ class EnsureCurriculumLoadedTests(RagTestCase):
             rag.default_index, name, lambda *a, _n=name, **k: self.calls.append(_n)
         )
 
-    def test_a_second_call_is_a_no_op(self):
-        rag.default_index._curriculum_loaded = True
+    def test_a_repeat_call_on_an_unchanged_corpus_does_no_work(self):
+        """Replaces a test that asserted a latch which never cleared.
 
-        rag.ensure_curriculum_loaded("anywhere")
+        The latch made a repeat call free, but it also meant no curriculum
+        change could take effect without restarting the process. The cheapness
+        is worth keeping; the permanence is not. The guard is now "the corpus
+        still matches what I loaded" rather than "I have loaded once".
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            rag.default_index._loaded_manifest = rag.scan_manifest(tmp)
+            rag.default_index.documents = [{"text": "x", "source": "a.txt", "chunk_idx": 0}]
 
-        self.assertEqual(self.calls, [])
+            rag.ensure_curriculum_loaded(tmp)
 
-    def test_a_missing_folder_is_skipped_but_still_marks_loaded(self):
+            self.assertEqual(self.calls, [])
+
+    def test_a_corpus_that_changed_is_reloaded_without_a_restart(self):
+        """The process-level half of the eviction fix."""
+        with tempfile.TemporaryDirectory() as tmp:
+            rag.default_index._loaded_manifest = rag.scan_manifest(tmp)
+            rag.default_index.documents = [{"text": "x", "source": "a.txt", "chunk_idx": 0}]
+
+            with open(os.path.join(tmp, "new.txt"), "w", encoding="utf-8") as handle:
+                handle.write("added after loading")
+
+            rag.ensure_curriculum_loaded(tmp)
+
+            self.assertEqual(
+                self.calls, ["load_curriculum_folder", "_maybe_upgrade_to_ivf", "save_index"]
+            )
+
+    def test_a_missing_folder_is_skipped(self):
+        """No longer asserts that a latch was set — there is no latch."""
         rag.ensure_curriculum_loaded(os.path.join("does", "not", "exist"))
 
         self.assertEqual(self.calls, [])
-        self.assertTrue(rag.default_index._curriculum_loaded)
+
+    def test_a_failed_build_does_not_freeze_the_process(self):
+        """The latch was set *before* indexing ran, so one bad PDF was fatal.
+
+        A raising loader used to leave the process serving a half-built index
+        for its whole lifetime, silently and with no log line. Now the failure
+        propagates and the next call tries again.
+        """
+        def explode(*_args, **_kwargs):
+            raise RuntimeError("corrupt PDF")
+
+        rag.default_index.load_curriculum_folder = explode
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                rag.ensure_curriculum_loaded(tmp)
+
+            self._patch("load_curriculum_folder")
+            rag.ensure_curriculum_loaded(tmp)
+
+        self.assertIn("load_curriculum_folder", self.calls)
 
     def force_staleness(self, stale):
-        rag.default_index.is_index_stale = lambda _p: stale
+        rag.default_index.is_index_stale = lambda *_a, **_k: stale
 
     def test_a_stale_index_is_rebuilt_and_saved(self):
         self.force_staleness(True)
         with tempfile.TemporaryDirectory() as tmp:
-            rag.default_index.index = FakeIndex([[0.0]], [[0]])
-
             rag.ensure_curriculum_loaded(tmp)
 
         self.assertEqual(

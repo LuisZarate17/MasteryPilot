@@ -27,6 +27,27 @@ ALLOWED_UPLOAD_TYPES = {
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
+def _invalidate_rag_index():
+    """Tell the retrieval index the curriculum changed.
+
+    Imported here rather than at module scope: rag is import-safe, but this
+    keeps the dependency visible at the two call sites that create it.
+
+    Without this, a document deleted through the dashboard went on being
+    retrieved and quoted to students. The index re-checks the corpus when a
+    chat session opens, so this is not the only thing standing between a
+    deletion and its taking effect — but it is what makes the two explicitly
+    connected rather than accidentally so.
+    """
+    try:
+        import rag
+
+        rag.invalidate()
+    except Exception as exc:  # pragma: no cover - never block the upload
+        # The RAG stack is optional; the dashboard must work without it.
+        print(f"[curriculum] could not invalidate the RAG index: {exc}")
+
+
 @login_required
 @user_passes_test(is_teacher_or_admin)
 def curriculum_view(request, filename):
@@ -54,6 +75,7 @@ def curriculum_delete(request):
 
     if os.path.exists(path):
         os.remove(path)
+        _invalidate_rag_index()
 
     return redirect("dashboard")
 
@@ -95,6 +117,8 @@ def upload_curriculum(request):
     with open(destination, "wb+") as dest:
         for chunk in file.chunks():
             dest.write(chunk)
+
+    _invalidate_rag_index()
 
     return redirect("dashboard")
 
