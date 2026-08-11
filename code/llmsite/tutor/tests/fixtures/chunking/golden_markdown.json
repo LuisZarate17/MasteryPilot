@@ -1,0 +1,22 @@
+[
+  {
+    "chunk_idx": 0,
+    "source": "code_heavy.md",
+    "text": "Introduction to Loops A loop repeats a block of instructions. The  loop is the most common form\nwhen you know in advance how many repetitions you need. That program adds the whole numbers from 1 to 10 and prints 55. The variable\n is called an accumulator because it accumulates the running sum. A  loop repeats for as long as a condition stays true:"
+  },
+  {
+    "chunk_idx": 1,
+    "source": "code_heavy.md",
+    "text": "umulates the running sum. A  loop repeats for as long as a condition stays true: Be careful: if the condition never becomes false the loop runs forever. Always\nmake sure something inside the body changes the value the condition tests."
+  },
+  {
+    "chunk_idx": 0,
+    "source": "lesson.md",
+    "text": "Unit 3: Working with Variables An expression is any combination of numbers, variables and operations. An\nequation states that two expressions are equal. See the reference sheet\nfor the full list of symbols. Substitution To evaluate an expression, replace each variable with its value. If , then\nthe expression  evaluates to 13. Order of operations Work through an expression in this order:"
+  },
+  {
+    "chunk_idx": 1,
+    "source": "lesson.md",
+    "text": "evaluates to 13. Order of operations Work through an expression in this order: The common mnemonic is PEMDAS. Note that multiplication and division share a\nlevel, so  is 16 and not 1. A worked example Evaluate  when  and . Substitute first, then follow\nthe order of operations to get 27."
+  }
+]

@@ -1,0 +1,11 @@
+Fractions
+
+A fraction represents a part of a whole. The number below the line is the denominator and tells you how many equal parts the whole has been divided into. The number above the line is the numerator and tells you how many of those parts you have.
+
+Equivalent fractions
+
+Two fractions are equivalent when they represent the same amount. Multiplying the numerator and the denominator by the same nonzero number always produces an equivalent fraction, because you are multiplying by a disguised form of one.
+
+Adding fractions
+
+To add two fractions they must share a denominator. Find the least common denominator, rewrite each fraction as an equivalent fraction over that denominator, then add the numerators and leave the denominator unchanged.
