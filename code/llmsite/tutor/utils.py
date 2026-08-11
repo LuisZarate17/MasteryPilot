@@ -96,8 +96,10 @@ def calculate_student_progress(user):
     # 70% weight on quiz performance, 30% weight on session activity
     quiz_component = 0.0
     if quiz_average is not None:
-        # Normalize quiz average to 0-1 scale and apply weight
-        quiz_component = (quiz_average / 100.0) * 70.0
+        # quiz_average is already a 0-1 fraction (earned/possible), so it only
+        # needs the weight. Dividing by 100 first made this component 100x too
+        # small — a student with every answer right scored 0.7 instead of 70.
+        quiz_component = quiz_average * 70.0
     
     session_component = 0.0
     if total_sessions > 0:

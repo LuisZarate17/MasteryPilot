@@ -255,7 +255,11 @@ def student_edit(request):
             teacher = None
 
     student.teacher = teacher
-    if pw == pwc:
+    # Only touch the password when one was actually submitted. The form posts
+    # no password fields when the admin is just reassigning a teacher, and
+    # `pw == pwc` was true for None == None — which called set_password(None)
+    # and silently left the account with an unusable password.
+    if pw and pw == pwc:
         student.user.set_password(pw)
     student.save()
     student.user.save()

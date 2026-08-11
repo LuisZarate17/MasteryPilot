@@ -92,7 +92,9 @@ def progress_detail(request):
                     return JsonResponse({'error': 'Access denied'}, status=403)
             
             target_user = student_user
-        except (User.DoesNotExist, TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
+        # ValueError covers a non-numeric student_id: User.objects.get(id="abc")
+        # raises it rather than DoesNotExist, which used to escape as a 500.
+        except (ValueError, User.DoesNotExist, TeacherProfile.DoesNotExist, StudentProfile.DoesNotExist):
             return JsonResponse({'error': 'Student not found'}, status=404)
     else:
         target_user = request.user
