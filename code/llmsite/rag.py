@@ -37,6 +37,7 @@ SIDECAR_VERSION = 2
 # ── Tuneable constants ────────────────────────────────────────────────────────
 CHUNK_SIZE    = 400   # target characters per chunk
 CHUNK_OVERLAP = 80    # characters carried forward into the next chunk
+MIN_CHUNK_BUDGET = 120  # floor, so a deep heading path cannot starve the text
 TOP_K         = 5     # candidates retrieved before threshold filtering
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
 # Above this many chunks, swap exact search for approximate IVF. Raised from
@@ -101,47 +102,66 @@ class IndexUnusable(RuntimeError):
 # Chunking — pure, stateless, shared by every index
 # ─────────────────────────────────────────────────────────────────────────────
 
-def chunk_text(text, source):
-    """
-    Split text into sentence-boundary-aware chunks with overlap.
-    Returns list of {"text": str, "source": str, "chunk_idx": int}.
-    """
+def _split(text, size, overlap):
+    """Sentence-boundary-aware split with overlap. Returns a list of strings."""
     sentences = re.split(r'(?<=[.!?])\s+|\n{2,}', text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
 
-    chunks = []
+    pieces = []
     current = ""
-    idx = 0
 
     for sentence in sentences:
         # Sentence alone exceeds chunk size — flush buffer then hard-split it
-        if len(sentence) > CHUNK_SIZE:
+        if len(sentence) > size:
             if current:
-                chunks.append({"text": current, "source": source, "chunk_idx": idx})
-                idx += 1
+                pieces.append(current)
                 # No overlap carried here on purpose: the hard-split below
                 # iterates `sentence`, not `current`, and sets `current` itself
                 # afterwards. An assignment here would be a dead store.
-            for i in range(0, len(sentence), CHUNK_SIZE - CHUNK_OVERLAP):
-                piece = sentence[i:i + CHUNK_SIZE]
+            for i in range(0, len(sentence), size - overlap):
+                piece = sentence[i:i + size]
                 if piece.strip():
-                    chunks.append({"text": piece, "source": source, "chunk_idx": idx})
-                    idx += 1
-            current = sentence[-CHUNK_OVERLAP:]
+                    pieces.append(piece)
+            current = sentence[-overlap:]
             continue
 
         candidate = (current + " " + sentence).strip() if current else sentence
-        if len(candidate) > CHUNK_SIZE and current:
-            chunks.append({"text": current, "source": source, "chunk_idx": idx})
-            idx += 1
-            overlap_tail = current[-CHUNK_OVERLAP:] if len(current) > CHUNK_OVERLAP else current
+        if len(candidate) > size and current:
+            pieces.append(current)
+            overlap_tail = current[-overlap:] if len(current) > overlap else current
             current = (overlap_tail + " " + sentence).strip()
         else:
             current = candidate
 
     if current:
-        chunks.append({"text": current, "source": source, "chunk_idx": idx})
-    return chunks
+        pieces.append(current)
+    return pieces
+
+
+def chunk_text(text, source, prefix="", start_idx=0):
+    """
+    Split text into sentence-boundary-aware chunks with overlap.
+    Returns list of {"text": str, "source": str, "chunk_idx": int}.
+
+    *prefix* is repeated at the head of every chunk — the enclosing heading
+    path, for formats that have one. It is charged against the chunk budget so
+    a prefixed chunk still respects CHUNK_SIZE, and with the default empty
+    prefix the arithmetic is exactly what it was before prefixes existed.
+
+    *start_idx* continues the numbering from an earlier call. A markdown file
+    is chunked one section at a time, and (source, chunk_idx) has to stay
+    unique within a document: build_rag_system_message deduplicates on that
+    pair, so four sections each starting again at 0 would look like the same
+    chunk four times and three of them would be dropped before reaching the
+    model.
+    """
+    budget = max(CHUNK_SIZE - len(prefix), MIN_CHUNK_BUDGET)
+    overlap = min(CHUNK_OVERLAP, budget // 2)
+
+    return [
+        {"text": prefix + piece, "source": source, "chunk_idx": start_idx + idx}
+        for idx, piece in enumerate(_split(text, budget, overlap))
+    ]
 
 
 def _rel_source(file_path, curriculum_root):
@@ -169,29 +189,131 @@ def _read_text(filepath):
             return f.read()
 
 
+_FENCED = re.compile(r'^[ \t]*```[^\n]*\n(.*?)^[ \t]*```[ \t]*$\n?', re.MULTILINE | re.DOTALL)
+_INLINE_CODE = re.compile(r'`([^`\n]+)`')
+_HEADING = re.compile(r'^(#{1,6})\s+(.*?)\s*#*$')
+_PLACEHOLDER = re.compile('\x00CODE(\\d+)\x00')
+
+HEADING_SEPARATOR = " > "
+
+
+def _stash_code(content):
+    """Replace code with placeholders, returning (content, stash).
+
+    Two reasons this happens before anything else touches the text.
+
+    The emphasis rule rewrites paired asterisks, and code is full of them —
+    `a * b * c` would come out as `a b c`, and `**kwargs` would lose its stars.
+
+    Section splitting reads lines beginning with # as headings, and a Python
+    comment inside a fenced block looks exactly like one. Collapsing each block
+    to a single placeholder line keeps the two from being confused.
+    """
+    stash = []
+
+    def keep(match):
+        stash.append(match.group(1))
+        return f"\x00CODE{len(stash) - 1}\x00"
+
+    content = _FENCED.sub(keep, content)
+    content = _INLINE_CODE.sub(keep, content)
+    return content, stash
+
+
+def _restore_code(content, stash):
+    return _PLACEHOLDER.sub(lambda m: stash[int(m.group(1))], content)
+
+
 def strip_markdown(content):
-    """Reduce markdown to the prose underneath it."""
+    """Reduce markdown to the prose underneath it, keeping the code.
+
+    Code used to be deleted outright — every fenced block and every inline
+    span. For a technical curriculum that removes the most retrieval-worthy
+    content on the page: a lesson on loops reached the embedder with both its
+    programs gone, and prose collapsed into "If , then the expression
+    evaluates to 13". The fences are markup; what they wrap is the lesson.
+
+    The old pattern also mispaired. `{1,3}[\\s\\S]*?`{1,3} let a single-backtick
+    span close against a fence opener and swallow everything between them.
+    """
+    content, stash = _stash_code(content)
+    content = _strip_inline_markup(content)
+    content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
+    return _restore_code(content, stash)
+
+
+def _strip_inline_markup(content):
+    """Images, links and emphasis. Headings are left for section splitting."""
     content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
     content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
-    content = re.sub(r'`{1,3}[\s\S]*?`{1,3}', '', content)
     content = re.sub(r'[*_]{1,2}([^*_\n]+)[*_]{1,2}', r'\1', content)
-    content = re.sub(r'^#{1,6}\s+', '', content, flags=re.MULTILINE)
     return content
 
 
+def split_markdown_sections(content):
+    """Split markdown into (heading_path, body) pairs, in document order.
+
+    The heading path is the trail of enclosing headings, so a chunk from the
+    middle of a document carries "Loops in Python > While loops" rather than
+    arriving with no indication of what it is about. Headings used to be
+    stripped to bare text and left inline, which meant only the chunk that
+    happened to contain the heading line knew anything about its section.
+
+    Text before the first heading gets an empty path.
+    """
+    stack = []
+    body = []
+    sections = []
+
+    def flush():
+        text = "\n".join(body).strip()
+        if text:
+            sections.append((HEADING_SEPARATOR.join(title for _, title in stack), text))
+        body.clear()
+
+    for line in content.splitlines():
+        heading = _HEADING.match(line)
+        if heading:
+            flush()
+            level = len(heading.group(1))
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, heading.group(2).strip()))
+        else:
+            body.append(line)
+
+    flush()
+    return sections
+
+
 def _extract_txt(filepath):
-    return [(_read_text(filepath), "")]
+    return [(_read_text(filepath), "", "")]
 
 
 def _extract_md(filepath):
-    return [(strip_markdown(_read_text(filepath)), "")]
+    """One piece per section, each prefixed with its heading path.
+
+    Code is stashed before section splitting and restored afterwards, so a
+    Python comment inside a fenced block is never mistaken for a heading.
+    """
+    content, stash = _stash_code(_read_text(filepath))
+    content = _strip_inline_markup(content)
+
+    return [
+        (_restore_code(body, stash), "", f"{path}\n" if path else "")
+        for path, body in split_markdown_sections(content)
+    ]
 
 
 def _extract_pdf(filepath):
     from PyPDF2 import PdfReader
 
     reader = PdfReader(filepath)
-    return [("".join(page.extract_text() or "" for page in reader.pages), "")]
+    # Joined with a blank line, not with nothing. An empty separator fused the
+    # last word of each page onto the first word of the next, inventing a token
+    # that appears nowhere in the document, once per page boundary.
+    text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    return [(text, "", "")]
 
 
 def _extract_docx(filepath):
@@ -202,7 +324,7 @@ def _extract_docx(filepath):
         # rather than a per-file error for a format we simply cannot read here.
         return []
     document = _docx.Document(filepath)
-    return [("\n".join(p.text for p in document.paragraphs if p.text.strip()), "")]
+    return [("\n".join(p.text for p in document.paragraphs if p.text.strip()), "", "")]
 
 
 def _extract_json(filepath):
@@ -214,7 +336,7 @@ def _extract_json(filepath):
     for item in items:
         if isinstance(item, dict) and item.get("content"):
             title = item.get("title", os.path.basename(filepath))
-            pieces.append((item["content"], f"/{title}"))
+            pieces.append((item["content"], f"/{title}", ""))
     return pieces
 
 
@@ -634,9 +756,10 @@ class RagIndex:
     # endswith, open, chunk, add. They are now one walk over a dispatch table:
     # an extractor turns a file into text, and everything after that is shared.
     #
-    # An extractor returns a list of (text, source_suffix) pairs rather than a
-    # single string, because JSON files hold several records and each deserves
-    # its own source label. Every other format returns exactly one pair.
+    # An extractor returns a list of (text, source_suffix, chunk_prefix)
+    # triples rather than a single string. JSON files hold several records and
+    # each deserves its own source label; markdown yields one piece per section
+    # and each carries its heading path as a prefix repeated on every chunk.
     #
     # The public load_*_files names are kept as thin wrappers. They are the
     # tested surface, and there was no reason to churn callers or tests to
@@ -670,9 +793,17 @@ class RagIndex:
                 continue
 
             label = _rel_source(filepath, root)
-            for text, suffix in pieces:
-                if text and text.strip():
-                    self.add_documents(chunk_text(text, label + suffix))
+            # Numbering continues per source label, so a markdown file's
+            # sections stay distinguishable while a JSON file's records — which
+            # each get their own label — each start again at zero.
+            next_idx = {}
+            for text, suffix, prefix in pieces:
+                if not (text and text.strip()):
+                    continue
+                source = label + suffix
+                chunks = chunk_text(text, source, prefix, next_idx.get(source, 0))
+                next_idx[source] = next_idx.get(source, 0) + len(chunks)
+                self.add_documents(chunks)
 
     def load_txt_files(self, folder_path, curriculum_root=None):
         self.load_files(folder_path, curriculum_root, extensions={".txt"})

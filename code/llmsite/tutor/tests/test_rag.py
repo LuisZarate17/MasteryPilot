@@ -1017,6 +1017,168 @@ class FileLoaderTests(RagTestCase):
         self.assertEqual(self.added, [])
 
 
+class MarkdownCodeTests(RagTestCase):
+    """Code is the lesson, not the markup around it.
+
+    Every fenced block and inline span used to be deleted outright, so a page
+    teaching loops reached the embedder with both its programs gone and its
+    prose reduced to "If , then the expression  evaluates to 13".
+    """
+
+    def test_a_fenced_block_keeps_its_contents(self):
+        text = rag.strip_markdown("Example:\n\n```python\ntotal = 0\nprint(total)\n```\n")
+
+        self.assertIn("total = 0", text)
+        self.assertIn("print(total)", text)
+
+    def test_the_fence_markers_themselves_are_dropped(self):
+        text = rag.strip_markdown("```python\nx = 1\n```\n")
+
+        self.assertNotIn("```", text)
+        self.assertNotIn("python\n", text)
+
+    def test_inline_code_keeps_its_contents(self):
+        text = rag.strip_markdown("If `x = 4`, then `3x + 1` evaluates to 13.")
+
+        self.assertEqual(text, "If x = 4, then 3x + 1 evaluates to 13.")
+
+    def test_asterisks_inside_code_survive_the_emphasis_rule(self):
+        """`8 / 2 * 4` and `**kwargs` were casualties of the emphasis regex."""
+        text = rag.strip_markdown("Note that `8 / 2 * 4` is 16, and `**kwargs` collects them.")
+
+        self.assertIn("8 / 2 * 4", text)
+        self.assertIn("**kwargs", text)
+
+    def test_emphasis_outside_code_is_still_stripped(self):
+        text = rag.strip_markdown("An **expression** combines _numbers_ and operations.")
+
+        self.assertEqual(text, "An expression combines numbers and operations.")
+
+    def test_an_inline_span_cannot_swallow_a_following_fence(self):
+        """The old 1-to-3-backtick pattern mispaired and ate everything between."""
+        text = rag.strip_markdown("Use `x` here.\n\n```\nkeep me\n```\n\nAnd after.")
+
+        self.assertIn("x", text)
+        self.assertIn("keep me", text)
+        self.assertIn("And after.", text)
+
+    def test_links_and_images_are_still_handled(self):
+        text = rag.strip_markdown("![alt](img.png)\nSee [the docs](http://x) for more.")
+
+        self.assertNotIn("img.png", text)
+        self.assertNotIn("http://x", text)
+        self.assertIn("the docs", text)
+
+
+class MarkdownSectionTests(RagTestCase):
+    """Chunks carry the heading trail that explains what they are about."""
+
+    DOC = (
+        "# Loops\n\nIntro prose.\n\n"
+        "## While loops\n\nBody of while.\n\n"
+        "### Pitfalls\n\nInfinite loops.\n\n"
+        "## For loops\n\nBody of for.\n"
+    )
+
+    def paths(self, content=None):
+        return [path for path, _ in rag.split_markdown_sections(content or self.DOC)]
+
+    def test_nesting_builds_a_trail(self):
+        self.assertIn("Loops > While loops > Pitfalls", self.paths())
+
+    def test_a_sibling_heading_pops_the_deeper_one(self):
+        self.assertIn("Loops > For loops", self.paths())
+        self.assertNotIn("Loops > While loops > For loops", self.paths())
+
+    def test_text_before_any_heading_has_no_path(self):
+        sections = rag.split_markdown_sections("Preamble text.\n\n# Later\n\nBody.\n")
+
+        self.assertEqual(sections[0][0], "")
+
+    def test_headings_do_not_appear_twice(self):
+        """The heading becomes the path; repeating it in the body is noise."""
+        sections = dict((p, b) for p, b in rag.split_markdown_sections(self.DOC))
+
+        self.assertNotIn("While loops", sections["Loops > While loops"])
+
+    def test_a_hash_inside_a_code_block_is_not_a_heading(self):
+        """Python comments look exactly like markdown headings."""
+        content, stash = rag._stash_code("# Real\n\n```python\n# not a heading\nx = 1\n```\n")
+
+        self.assertEqual(self.paths(content), ["Real"])
+
+    def test_every_chunk_of_a_section_carries_the_path(self):
+        chunks = rag.chunk_text("word " * 400, "a.md", prefix="Unit > Topic\n")
+
+        self.assertGreater(len(chunks), 1)
+        for chunk in chunks:
+            self.assertTrue(chunk["text"].startswith("Unit > Topic\n"))
+
+    def test_a_prefix_is_charged_against_the_chunk_budget(self):
+        """Otherwise a prefixed chunk quietly exceeds CHUNK_SIZE."""
+        for chunk in rag.chunk_text("word " * 400, "a.md", prefix="A rather long heading path\n"):
+            self.assertLessEqual(len(chunk["text"]), rag.CHUNK_SIZE)
+
+    def test_a_pathological_prefix_still_leaves_room_for_text(self):
+        chunks = rag.chunk_text("word " * 200, "a.md", prefix="x" * (rag.CHUNK_SIZE * 2))
+
+        self.assertTrue(chunks)
+        self.assertTrue(all(len(c["text"]) > rag.CHUNK_SIZE for c in chunks))
+
+    def test_numbering_continues_across_sections(self):
+        """(source, chunk_idx) has to stay unique — the system message dedupes on it."""
+        first = rag.chunk_text("Section one body.", "a.md")
+        second = rag.chunk_text("Section two body.", "a.md", start_idx=len(first))
+
+        self.assertEqual(second[0]["chunk_idx"], 1)
+
+    def test_an_empty_prefix_changes_nothing(self):
+        """The default path has to be byte-identical to life before prefixes."""
+        text = "A sentence. " * 60
+
+        self.assertEqual(rag.chunk_text(text, "a.txt"), rag.chunk_text(text, "a.txt", prefix=""))
+
+
+class PdfPageJoinTests(RagTestCase):
+    """Pages need a separator, or the last word of one fuses to the first of the next."""
+
+    class FakePage:
+        def __init__(self, text):
+            self._text = text
+
+        def extract_text(self):
+            return self._text
+
+    def extract(self, pages):
+        import sys
+        import types
+
+        module = types.ModuleType("PyPDF2")
+        module.PdfReader = lambda _path: type("Reader", (), {"pages": pages})()
+        sys.modules["PyPDF2"] = module
+        self.addCleanup(sys.modules.pop, "PyPDF2", None)
+        return rag._extract_pdf("ignored.pdf")[0][0]
+
+    def test_pages_are_separated(self):
+        text = self.extract([self.FakePage("ends with cell"), self.FakePage("membrane begins")])
+
+        self.assertNotIn("cellmembrane", text)
+        self.assertIn("cell", text)
+        self.assertIn("membrane", text)
+
+    def test_the_separator_is_a_paragraph_break(self):
+        """A blank line is also a chunk boundary the splitter understands."""
+        text = self.extract([self.FakePage("one"), self.FakePage("two")])
+
+        self.assertEqual(text, "one\n\ntwo")
+
+    def test_a_page_that_extracts_nothing_is_tolerated(self):
+        text = self.extract([self.FakePage("one"), self.FakePage(None), self.FakePage("three")])
+
+        self.assertIn("one", text)
+        self.assertIn("three", text)
+
+
 class LoaderDispatchTests(RagTestCase):
     """One walk over a table, where five near-identical functions used to be."""
 
