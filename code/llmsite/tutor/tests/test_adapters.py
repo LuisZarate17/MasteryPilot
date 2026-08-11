@@ -331,3 +331,114 @@ class LazyImportTests(SimpleTestCase):
         for heavy in ("torch", "transformers", "sentence_transformers", "faiss"):
             with self.subTest(module=heavy):
                 self.assertNotIn(heavy, sys.modules)
+
+
+class StudentTurnsTests(SimpleTestCase):
+    """Which turns the student actually typed.
+
+    The persona bootstrap start_chat sends is stored with role="user" so the
+    model sees the conversation it really had. Retrieving against "Here is your
+    student information" would drown a follow-up question in boilerplate.
+
+    The rule is structural — everything before the first assistant turn is
+    scaffolding — rather than matching the prompt's opening words. A textual
+    copy of that rule would be free to drift out of step with
+    introduction_prompt; conversation shape cannot.
+    """
+
+    def test_the_bootstrap_turn_is_not_a_student_turn(self):
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": introduction_prompt("Ada", "WSU", "11", "Math")},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+
+        self.assertEqual(languagemodel.student_turns(messages), [])
+
+    def test_real_turns_are_returned_oldest_first(self):
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "what is a fraction"},
+            {"role": "assistant", "content": "A fraction is ..."},
+            {"role": "user", "content": "why?"},
+        ]
+
+        self.assertEqual(
+            languagemodel.student_turns(messages), ["what is a fraction", "why?"]
+        )
+
+    def test_an_empty_conversation_has_no_turns(self):
+        self.assertEqual(languagemodel.student_turns([]), [])
+        self.assertEqual(languagemodel.student_turns(None), [])
+
+
+class RetrievalQueryWiringTests(SimpleTestCase):
+    """send_message must retrieve on the conversation, not the bare message."""
+
+    def send(self, messages, new_message):
+        adapter = get_adapter("qwen")
+        seen = {}
+
+        def fake_retrieve(query, **kwargs):
+            seen["query"] = query
+            return []
+
+        with mock.patch.object(adapter, "_generate", return_value="reply"), \
+                mock.patch("rag.retrieve", side_effect=fake_retrieve), \
+                mock.patch("rag.build_rag_system_message", return_value=""):
+            adapter.send_message(object(), object(), messages, new_message)
+        return seen["query"]
+
+    def test_a_follow_up_is_retrieved_against_what_came_before(self):
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "what is the discriminant"},
+            {"role": "assistant", "content": "It tells you ..."},
+        ]
+
+        query = self.send(messages, "why?")
+
+        self.assertIn("discriminant", query)
+        self.assertIn("why?", query)
+
+    def test_the_bootstrap_prompt_never_reaches_the_query(self):
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": introduction_prompt("Ada", "WSU", "11", "Math")},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+
+        query = self.send(messages, "what is a fraction")
+
+        self.assertNotIn("student information", query)
+        self.assertEqual(query, "what is a fraction")
+
+    def test_the_current_message_is_not_context_for_itself(self):
+        """The history is read before the new message is appended to it."""
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+
+        query = self.send(messages, "fractions")
+
+        self.assertEqual(query, "fractions")
+
+    def test_the_persisted_history_still_gets_the_clean_message(self):
+        """Context joins the query only, never the transcript."""
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "what is the discriminant"},
+            {"role": "assistant", "content": "It tells you ..."},
+        ]
+
+        self.send(messages, "why?")
+
+        self.assertEqual(messages[5], {"role": "user", "content": "why?"})

@@ -194,6 +194,30 @@ Do not include brackets, labels, or dialogue for any other speaker.
 End after the introduction."""
 
 
+def student_turns(messages) -> list:
+    """The messages the student actually typed, oldest first.
+
+    Everything before the first assistant turn is backend scaffolding. The
+    persona bootstrap start_chat sends is stored with role="user" so the model
+    sees the conversation it really had, but the student never wrote it, and
+    retrieving against "Here is your student information" would drown a
+    follow-up question in boilerplate.
+
+    Structural rather than textual: it keys off conversation shape instead of
+    matching the prompt's opening words, so it cannot drift out of step with
+    introduction_prompt the way a second copy of that rule would.
+    """
+    turns = []
+    seen_assistant = False
+    for message in messages or ():
+        role = message.get("role")
+        if role == "assistant":
+            seen_assistant = True
+        elif role == "user" and seen_assistant:
+            turns.append(message.get("content", ""))
+    return turns
+
+
 def effective_max_input_tokens(tokenizer) -> int:
     """Clamp: max_input = min(tokenizer.model_max_length, MAX_CONTEXT_TOKENS).
 
@@ -374,16 +398,20 @@ class Adapter:
 
     def send_message(self, model, tokenizer, messages, new_message):
         """Answer one student message. Returns (assistant_text, messages)."""
-        from rag import build_rag_system_message, retrieve
+        from rag import build_rag_system_message, build_retrieval_query, retrieve
 
         print("New message sent:", new_message)
+
+        # Read the history before appending, so the current message is not also
+        # counted as context for itself.
+        query = build_retrieval_query(new_message, student_turns(messages))
 
         # The persisted history gets the clean user message; the RAG context is
         # added only to the copy handed to the model.
         messages.append({"role": "user", "content": new_message})
 
         print("Getting curriculum context from RAG")
-        context_text = build_rag_system_message(retrieve(new_message))
+        context_text = build_rag_system_message(retrieve(query))
 
         messages_for_generation = list(messages)
         if context_text:

@@ -1497,3 +1497,56 @@ class LoaderDispatchTests(RagTestCase):
         rag.load_txt_files(self.tmp.name, self.tmp.name)
 
         self.assertEqual(self.sources(), ["a.txt"])
+
+
+class RetrievalQueryTests(RagTestCase):
+    """What actually gets embedded, given what came before.
+
+    Pure string assembly, so all of it runs here. This is the fix for the
+    most-travelled path in a tutoring chat: a follow-up that means nothing on
+    its own used to be embedded verbatim, and the tutor answered it with
+    curriculum context drawn from whatever three words happened to be near.
+    """
+
+    def test_a_first_message_is_used_as_is(self):
+        self.assertEqual(rag.build_retrieval_query("how do I solve for x"), "how do I solve for x")
+
+    def test_a_bare_follow_up_gains_its_topic(self):
+        query = rag.build_retrieval_query("why?", ["how do I find the discriminant"])
+
+        self.assertIn("discriminant", query)
+        self.assertIn("why?", query)
+
+    def test_the_current_message_comes_last(self):
+        query = rag.build_retrieval_query("and the second one?", ["tell me about fractions"])
+
+        self.assertTrue(query.endswith("and the second one?"))
+
+    def test_only_the_most_recent_turns_are_used(self):
+        query = rag.build_retrieval_query(
+            "why?", ["about photosynthesis", "about fractions", "about the discriminant"]
+        )
+
+        self.assertNotIn("photosynthesis", query)
+        self.assertIn("discriminant", query)
+
+    def test_context_is_bounded_so_a_real_question_still_dominates(self):
+        """A standalone question must not be diluted by an earlier topic."""
+        query = rag.build_retrieval_query("what is the Calvin cycle", ["x" * 5000])
+
+        self.assertLessEqual(len(query) - len("what is the Calvin cycle"), rag.CONTEXT_CHARS + 1)
+
+    def test_the_tail_of_long_context_is_kept(self):
+        """The most recent context is the most relevant."""
+        query = rag.build_retrieval_query("why?", ["irrelevant " * 100 + "discriminant"])
+
+        self.assertIn("discriminant", query)
+
+    def test_blank_turns_are_ignored(self):
+        self.assertEqual(rag.build_retrieval_query("why?", ["", "   ", None]), "why?")
+
+    def test_an_empty_message_with_context_still_yields_a_query(self):
+        self.assertEqual(rag.build_retrieval_query("", ["about fractions"]), "about fractions")
+
+    def test_no_history_and_no_message_is_empty(self):
+        self.assertEqual(rag.build_retrieval_query("", []), "")

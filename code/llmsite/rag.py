@@ -50,6 +50,10 @@ TOP_K         = 5     # chunks handed to the model
 CANDIDATE_MULTIPLIER = 4
 MIN_CANDIDATES       = 20
 MIN_SCORE     = 0.25  # cosine similarity floor (0.0–1.0); chunks below are dropped
+# How much of the conversation joins the query, so follow-ups like "why?" are
+# retrieved against what is being discussed rather than against three words.
+CONTEXT_TURNS = 2
+CONTEXT_CHARS = 200
 # Above this many chunks, swap exact search for approximate IVF. Raised from
 # 1000: at that size nlist = min(100, n // 10) gave 100 centroids over 1000
 # vectors, about 10 training points each, far below what FAISS wants — it warns
@@ -441,6 +445,39 @@ class BM25:
 
         ranked = sorted(scores.items(), key=lambda pair: (-pair[1], pair[0]))
         return ranked[:limit]
+
+
+def build_retrieval_query(message, previous_turns=(), turns=CONTEXT_TURNS,
+                          max_chars=CONTEXT_CHARS):
+    """Compose the text to embed for retrieval, given what came before.
+
+    A tutoring conversation is mostly turns that mean nothing on their own.
+    "Why?", "can you explain that again", "what about the second one" — embedded
+    verbatim these retrieve noise, and the tutor answers the follow-up with
+    curriculum context drawn from whatever those three words happened to be
+    near. In a multi-turn tutor that is the most-travelled path in the product,
+    so it was also the largest single gap in retrieval quality.
+
+    Recent turns are prepended and bounded rather than blended. The bound is
+    what keeps a well-formed standalone question from being diluted by an
+    earlier topic: a couple of hundred characters of context against a full
+    question leaves the question dominant, while "why?" gets almost all its
+    meaning from the context, which is exactly the intended asymmetry.
+
+    *previous_turns* is what the student actually typed, oldest first, without
+    the current message. Deciding which turns those are belongs to the caller —
+    this module has no opinion about personas or bootstrap scaffolding.
+    """
+    message = (message or "").strip()
+    recent = [turn.strip() for turn in previous_turns if turn and turn.strip()][-turns:]
+    if not recent:
+        return message
+
+    context = " ".join(recent)
+    if len(context) > max_chars:
+        # Keep the tail: the most recent context is the most relevant.
+        context = context[-max_chars:]
+    return f"{context} {message}".strip()
 
 
 def reciprocal_rank_fusion(rankings, k=RRF_K):
