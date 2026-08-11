@@ -14,9 +14,10 @@ pure helpers below be unit-tested without a model.
 from dataclasses import dataclass
 import os
 
-CURRICULUM_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "llmsite", "curriculum"
-)
+# The curriculum directory is settings.CURRICULUM_ROOT, read lazily in
+# load_curriculum. It used to be a module constant pointing one level deeper
+# (llmsite/curriculum), which no code ever wrote to — teacher uploads land in
+# settings.CURRICULUM_ROOT, so nothing uploaded was ever retrievable by RAG.
 
 # Hard upper bound, actual limit is determined by tokenizer.model_max_length
 MAX_CONTEXT_TOKENS = 32768
@@ -289,10 +290,12 @@ class Adapter:
 
     def load_curriculum(self):
         """Index the curriculum for RAG. Uses the disk cache when still fresh."""
+        from django.conf import settings
         from rag import ensure_curriculum_loaded
 
-        print(f"Loading curriculum from {CURRICULUM_PATH}...")
-        ensure_curriculum_loaded(CURRICULUM_PATH)
+        curriculum_path = str(settings.CURRICULUM_ROOT)
+        print(f"Loading curriculum from {curriculum_path}...")
+        ensure_curriculum_loaded(curriculum_path)
 
     def _apply_template(self, tokenizer, messages) -> str:
         kwargs = {}

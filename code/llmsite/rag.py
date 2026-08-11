@@ -1,18 +1,20 @@
-# rag.py
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
+"""Curriculum retrieval: chunking, embedding, FAISS index, search.
+
+sentence-transformers, faiss, numpy and PyPDF2 are imported *inside* the
+functions that need them, mirroring languagemodel.py. They live in
+requirements-llm.txt, which is optional and is not installed for the test
+suite, so importing this module must not drag them in — the embedder alone
+would download and load a model at import time.
+
+Everything that does not embed or search — chunking, staleness checks, source
+labelling, message formatting, the loader dispatch — is therefore importable
+and testable on the core install.
+"""
+
 import os
 import re
 import pickle
 import json
-from PyPDF2 import PdfReader
-
-try:
-    import docx as _docx
-    _DOCX_AVAILABLE = True
-except ImportError:
-    _DOCX_AVAILABLE = False
 
 # ── Tuneable constants ────────────────────────────────────────────────────────
 CHUNK_SIZE    = 400   # target characters per chunk
@@ -27,10 +29,35 @@ INDEX_PATH = os.getenv("RAG_INDEX_PATH", os.path.join(_BASE, "curriculum.faiss")
 DOCS_PATH  = INDEX_PATH.replace(".faiss", "_docs.pkl")
 
 # ── Embedding model + FAISS index ─────────────────────────────────────────────
-embedder  = SentenceTransformer("all-MiniLM-L6-v2")
-dimension = 384
-index     = faiss.IndexFlatIP(dimension)   # inner product == cosine after L2-norm
-documents = []   # list of {"text": str, "source": str, "chunk_idx": int}
+EMBED_MODEL = "all-MiniLM-L6-v2"
+dimension   = 384
+documents   = []   # list of {"text": str, "source": str, "chunk_idx": int}
+
+# Built on first use rather than at import — see the module docstring.
+embedder = None
+index    = None
+
+
+def get_embedder():
+    """The sentence-transformers model, loaded once per process."""
+    global embedder
+    if embedder is None:
+        from sentence_transformers import SentenceTransformer
+
+        embedder = SentenceTransformer(EMBED_MODEL)
+    return embedder
+
+
+def get_index():
+    """The FAISS index, created once per process."""
+    global index
+    if index is None:
+        import faiss
+
+        # Inner product == cosine once vectors are L2-normalised.
+        index = faiss.IndexFlatIP(dimension)
+    return index
+
 
 # Guard against loading the curriculum more than once per process
 _curriculum_loaded = False
@@ -58,7 +85,9 @@ def chunk_text(text, source):
             if current:
                 chunks.append({"text": current, "source": source, "chunk_idx": idx})
                 idx += 1
-                current = current[-CHUNK_OVERLAP:] if len(current) > CHUNK_OVERLAP else ""
+                # No overlap carried here on purpose: the hard-split below
+                # iterates `sentence`, not `current`, and sets `current` itself
+                # afterwards. An assignment here would be a dead store.
             for i in range(0, len(sentence), CHUNK_SIZE - CHUNK_OVERLAP):
                 piece = sentence[i:i + CHUNK_SIZE]
                 if piece.strip():
@@ -88,26 +117,33 @@ def chunk_text(text, source):
 def add_documents(chunk_dicts):
     """Embed chunks, L2-normalise, and add to FAISS index."""
     global documents
+    import faiss
+
     if not chunk_dicts:
         return
     texts = [c["text"] for c in chunk_dicts]
-    vecs = embedder.encode(texts, convert_to_numpy=True).astype("float32")
+    vecs = get_embedder().encode(texts, convert_to_numpy=True).astype("float32")
     faiss.normalize_L2(vecs)
-    index.add(vecs)
+    get_index().add(vecs)
     documents.extend(chunk_dicts)
 
 
 def save_index():
     """Persist FAISS index and document metadata to disk."""
-    faiss.write_index(index, INDEX_PATH)
+    import faiss
+
+    idx = get_index()
+    faiss.write_index(idx, INDEX_PATH)
     with open(DOCS_PATH, "wb") as f:
         pickle.dump(documents, f)
-    print(f"[RAG] Index saved: {index.ntotal} vectors → {INDEX_PATH}")
+    print(f"[RAG] Index saved: {idx.ntotal} vectors → {INDEX_PATH}")
 
 
 def load_index():
     """Load FAISS index and document metadata from disk."""
     global index, documents
+    import faiss
+
     index = faiss.read_index(INDEX_PATH)
     with open(DOCS_PATH, "rb") as f:
         documents = pickle.load(f)
@@ -129,6 +165,10 @@ def is_index_stale(curriculum_path):
 def _maybe_upgrade_to_ivf():
     """If corpus exceeds IVF_THRESHOLD, replace flat index with approximate IVF."""
     global index
+    import faiss
+    import numpy as np
+
+    index = get_index()
     n = index.ntotal
     if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
         return
@@ -161,7 +201,7 @@ def ensure_curriculum_loaded(curriculum_path):
         load_curriculum_folder(curriculum_path)
         _maybe_upgrade_to_ivf()
         save_index()
-        print(f"[RAG] Curriculum indexed: {index.ntotal} chunks.")
+        print(f"[RAG] Curriculum indexed: {get_index().ntotal} chunks.")
     else:
         load_index()
 
@@ -178,10 +218,12 @@ def retrieve(query, top_k=TOP_K, min_score=MIN_SCORE):
     """
     if not documents:
         return []
-    query_vec = embedder.encode([query], convert_to_numpy=True).astype("float32")
+    import faiss
+
+    query_vec = get_embedder().encode([query], convert_to_numpy=True).astype("float32")
     faiss.normalize_L2(query_vec)
     k = min(top_k, len(documents))
-    scores, indices = index.search(query_vec, k)
+    scores, indices = get_index().search(query_vec, k)
     results = []
     for score, i in zip(scores[0], indices[0]):
         if i < 0:
@@ -235,6 +277,8 @@ def load_txt_files(folder_path, curriculum_root=None):
 
 
 def load_pdf_files(folder_path, curriculum_root=None):
+    from PyPDF2 import PdfReader
+
     root = curriculum_root or folder_path
     for filename in os.listdir(folder_path):
         if not filename.endswith(".pdf"):
@@ -267,7 +311,9 @@ def load_md_files(folder_path, curriculum_root=None):
 
 
 def load_docx_files(folder_path, curriculum_root=None):
-    if not _DOCX_AVAILABLE:
+    try:
+        import docx as _docx
+    except ImportError:
         return
     root = curriculum_root or folder_path
     for filename in os.listdir(folder_path):
@@ -310,8 +356,12 @@ def load_all_files(folder_path, curriculum_root=None):
 
 
 def load_curriculum_folder(curriculum_path):
-    """Load files from the curriculum root and all immediate subdirectories."""
-    load_all_files(curriculum_path, curriculum_path)
-    for entry in os.scandir(curriculum_path):
-        if entry.is_dir():
-            load_all_files(entry.path, curriculum_path)
+    """Load files from the curriculum root and every subdirectory below it.
+
+    This walks the full tree to match is_index_stale, which uses os.walk. It
+    used to descend only one level, so a file nested two deep made the index
+    permanently stale — it was newer than the index, but indexing never picked
+    it up — and every startup rebuilt the whole corpus.
+    """
+    for root, _dirs, _files in os.walk(curriculum_path):
+        load_all_files(root, curriculum_path)
