@@ -21,6 +21,24 @@ from ..models import AdminProfile, Chat, Quiz, Session, StudentProfile, TeacherP
 
 PASSWORD = "ComplexPass123!"
 
+# Whether requirements-llm.txt is installed in the interpreter running this
+# suite. Both answers are legitimate and both are exercised in CI: tests.yml
+# installs requirements.txt alone, rag-verify installs the stack on top.
+#
+# A test that reads this to *skip* itself is almost always wrong — a skipped
+# test proves nothing, and the eight tests that once depended on the stack
+# being absent now establish the condition they need instead. Use it to pick
+# which assertion is meaningful, not whether to run.
+try:
+    import faiss  # noqa: F401
+    import sentence_transformers  # noqa: F401
+
+    HAS_RAG_STACK = True
+except ImportError:
+    HAS_RAG_STACK = False
+
+SKIP_REASON = "requirements-llm.txt is not installed (run the rag-verify workflow)"
+
 
 @override_settings(
     SECURE_SSL_REDIRECT=False,

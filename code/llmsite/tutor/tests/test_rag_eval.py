@@ -13,8 +13,13 @@ miscalibration this phase exists to prevent.
 
 import json
 import os
+import sys
+import unittest
+import unittest.mock as mock
 
 from django.test import SimpleTestCase
+
+from .base import HAS_RAG_STACK, SKIP_REASON
 
 from tutor.management.commands._rag_harness import (
     EVAL_CORPUS,
@@ -190,9 +195,23 @@ class EvaluationSetIntegrityTests(SimpleTestCase):
 
 
 class MissingStackTests(SimpleTestCase):
+    """require_stack() in both directions, without depending on this machine.
+
+    Binding a name to None in sys.modules makes `import <name>` raise
+    ImportError, which is precisely the condition require_stack() converts into
+    an actionable message. Establishing it here means the test says the same
+    thing on the core install and under rag-verify — it used to rely on the
+    stack being absent, so it could only ever pass in one of the two CI jobs.
+    """
+
     def test_the_absent_rag_stack_is_reported_actionably(self):
-        """This suite runs without requirements-llm.txt, so this is the real path."""
-        with self.assertRaises(MissingStackError) as caught:
-            require_stack()
+        with mock.patch.dict(sys.modules, {"faiss": None}):
+            with self.assertRaises(MissingStackError) as caught:
+                require_stack()
 
         self.assertIn("requirements-llm.txt", str(caught.exception))
+
+    @unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)
+    def test_a_present_stack_passes_the_check(self):
+        """The mirror: nothing raised. Only meaningful where the stack exists."""
+        require_stack()

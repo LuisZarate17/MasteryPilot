@@ -11,6 +11,7 @@ Two tiers here:
   Both module globals must be patched too, since every endpoint gates on them.
 """
 
+from unittest import mock
 from unittest.mock import patch
 
 from django.urls import reverse
@@ -37,6 +38,43 @@ class LoadedModel:
         for p in self._patches:
             p.start()
         return self.adapter
+
+    def __exit__(self, *exc):
+        for p in reversed(self._patches):
+            p.stop()
+        return False
+
+
+class UnloadedModel:
+    """The inverse of LoadedModel: generation is unavailable.
+
+    Pinning the globals to None is not enough on its own. Every view calls
+    ensure_llm_initialized() first, which sees model is None and loads one — so
+    a bare patch is overwritten before the view reads it. With the stack
+    installed that meant these tests downloaded Qwen3-4B and ran real
+    inference, which is why the rag-verify job took eight minutes and returned
+    200 where 503 was expected.
+
+    So the adapter's init is made to fail instead. That is the real condition
+    being described — a machine where loading weights does not work — and it
+    exercises ensure_llm_initialized's own except branch, which is what sets
+    both globals back to None.
+    """
+
+    def __init__(self):
+        self._patches = []
+
+    def __enter__(self):
+        failing = mock.Mock()
+        failing.init_model.side_effect = RuntimeError("no weights on this machine")
+        self._patches = [
+            patch("tutor.views.chat.model", None),
+            patch("tutor.views.chat.tokenizer", None),
+            patch("tutor.views.chat._adapter", return_value=failing),
+        ]
+        for p in self._patches:
+            p.start()
+        return self
 
     def __exit__(self, *exc):
         for p in reversed(self._patches):
@@ -139,8 +177,8 @@ class SessionInitTests(MasteryPilotTestCase):
         self.assertEqual(response.status_code, 404)
 
     def test_an_unavailable_model_reports_service_unavailable(self):
-        """No patching: model is None on the core install."""
-        response = self.client.post(self.url())
+        with UnloadedModel():
+            response = self.client.post(self.url())
 
         self.assertEqual(response.status_code, 503)
         self.assertFalse(DBChat.objects.filter(session=self.session).exists())
@@ -193,7 +231,8 @@ class NewSessionTests(MasteryPilotTestCase):
 
     def test_an_unavailable_model_still_creates_the_session(self):
         """Degrades rather than 500s — the session row is the useful part."""
-        response = self.post(title="Offline")
+        with UnloadedModel():
+            response = self.post(title="Offline")
 
         self.assertEqual(response.status_code, 200)
         payload = json.loads(response.content)
@@ -258,7 +297,8 @@ class ChatTests(MasteryPilotTestCase):
         self.assertEqual(self.send("hello").status_code, 400)
 
     def test_an_unavailable_model_does_not_persist_an_assistant_turn(self):
-        response = self.send("hello")
+        with UnloadedModel():
+            response = self.send("hello")
 
         self.assertEqual(response.status_code, 200)
         payload = json.loads(response.content)

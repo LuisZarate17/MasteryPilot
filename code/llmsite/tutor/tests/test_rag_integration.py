@@ -29,15 +29,7 @@ from tutor.management.commands._rag_harness import (
     isolated_index,
 )
 
-try:
-    import faiss  # noqa: F401
-    import sentence_transformers  # noqa: F401
-
-    HAS_RAG_STACK = True
-except ImportError:
-    HAS_RAG_STACK = False
-
-SKIP_REASON = "requirements-llm.txt is not installed (run the rag-verify workflow)"
+from .base import HAS_RAG_STACK, SKIP_REASON
 
 
 @unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)

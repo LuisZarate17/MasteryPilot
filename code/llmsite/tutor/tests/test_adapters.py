@@ -11,7 +11,11 @@ not installed and there is no GPU, so no model has ever been loaded on this
 machine — see the live-generation note in CLEANUP_PLAN.md.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
+import subprocess
+import sys
+import textwrap
 import unittest.mock as mock
 
 from django.conf import settings
@@ -324,13 +328,53 @@ class CurriculumPathTests(SimpleTestCase):
 
 
 class LazyImportTests(SimpleTestCase):
-    def test_importing_the_adapter_does_not_pull_in_the_llm_stack(self):
-        """requirements.txt alone must be enough to import this module."""
-        import sys
+    """requirements.txt alone must be enough to import the adapter.
 
-        for heavy in ("torch", "transformers", "sentence_transformers", "faiss"):
-            with self.subTest(module=heavy):
-                self.assertNotIn(heavy, sys.modules)
+    This runs in a subprocess rather than inspecting this process's sys.modules.
+    The in-process version asserted that torch had never been imported by
+    *anything*, which is a different and much weaker claim: it held only because
+    the stack was absent, and broke the moment rag-verify installed it and the
+    RAG integration tests imported faiss and sentence_transformers legitimately.
+
+    A clean interpreter answers the question actually being asked — does
+    importing this module drag the heavy stack in with it — and gives the same
+    answer whether or not the stack is installed.
+    """
+
+    HEAVY = ("torch", "transformers", "sentence_transformers", "faiss")
+
+    def _imports_after(self, module):
+        """Return which heavy modules are loaded after importing *module*."""
+        source = textwrap.dedent(
+            f"""
+            import sys
+            import {module}  # noqa: F401
+            print(",".join(m for m in {self.HEAVY!r} if m in sys.modules))
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=str(Path(__file__).resolve().parents[2]),
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"importing {module} in a clean interpreter failed:\n{result.stderr}",
+        )
+        return [name for name in result.stdout.strip().split(",") if name]
+
+    def test_importing_the_adapter_does_not_pull_in_the_llm_stack(self):
+        self.assertEqual(self._imports_after("languagemodel"), [])
+
+    def test_importing_rag_does_not_pull_in_the_llm_stack(self):
+        """The same contract, and the one that actually regressed once.
+
+        rag.py built an embedder and a FAISS index at import time, so `import
+        rag` was impossible on the core install until Phase 6 made it lazy.
+        """
+        self.assertEqual(self._imports_after("rag"), [])
 
 
 class StudentTurnsTests(SimpleTestCase):
