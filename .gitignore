@@ -34,6 +34,14 @@ obj/
 # Other
 curriculum/
 
+# The RAG index and its metadata sidecar. rag.py puts these *beside* the
+# corpus rather than inside it on purpose — is_index_stale walks the corpus
+# tree, so an index stored within it would be newer than itself and stale on
+# every check. That places them outside the curriculum/ rule above, so running
+# a single chat left two untracked files in git status permanently.
+*.faiss
+*_docs.json
+
 # Byte-compiled / cached files
 *.pyc
 *$py.class
