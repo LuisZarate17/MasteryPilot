@@ -66,11 +66,19 @@ class SpecTableTests(SimpleTestCase):
         self.assertTrue(spec.disable_thinking)
         self.assertTrue(spec.strip_think_blocks)
 
-    def test_llama_carries_the_hand_written_template_and_a_stop_marker(self):
+    def test_llama_uses_the_tokenizer_template_not_a_hand_written_one(self):
+        """The hand-written "<|role|>" template was wrong and is gone.
+
+        It emitted <|system|>/<|user|>/<|assistant|>, none of which is a token
+        in Llama-3.2's vocabulary, so the model saw role markers as ordinary
+        text with no turn boundaries and echoed the system prompt back. Pinned
+        here because the override is easy to reintroduce and its damage is only
+        visible against real weights.
+        """
         spec = SPECS["llama"]
 
-        self.assertIsNotNone(spec.chat_template)
-        self.assertEqual(spec.truncate_at, "<|")
+        self.assertIsNone(spec.chat_template)
+        self.assertIsNone(spec.truncate_at)
 
     def test_mistral_uses_the_tokenizer_defaults(self):
         spec = SPECS["mistral"]
@@ -222,9 +230,25 @@ class AdapterCleanTests(SimpleTestCase):
     def test_qwen_strips_reasoning(self):
         self.assertEqual(get_adapter("qwen")._clean("<think>x</think> Hi"), "Hi")
 
-    def test_llama_truncates_at_a_fabricated_turn(self):
-        """The hand-written template lets the model roll on into a fake turn."""
-        self.assertEqual(get_adapter("llama")._clean("Hi<|user|>junk"), "Hi")
+    def test_llama_no_longer_truncates_at_a_pseudo_turn(self):
+        """truncate_at went with the hand-written template.
+
+        Under the tokenizer's own template there are real turn boundaries and
+        no fabricated ones to cut, and "<|" is the prefix of Llama-3.2's own
+        special tokens — so truncating there would cut real output.
+        """
+        self.assertEqual(get_adapter("llama")._clean("Hi<|user|>junk"), "Hi<|user|>junk")
+
+    def test_no_spec_truncates_by_default(self):
+        for key in SPECS:
+            with self.subTest(model=key):
+                self.assertIsNone(SPECS[key].truncate_at)
+
+    def test_truncation_still_works_when_a_spec_asks_for_it(self):
+        """The mechanism is kept even though no family uses it today."""
+        adapter = Adapter(ModelSpec(name="x", default_model_id="org/x", truncate_at="<|"))
+
+        self.assertEqual(adapter._clean("Hi<|user|>junk"), "Hi")
 
     def test_mistral_leaves_both_alone(self):
         text = "<think>kept</think> and <| kept"
@@ -259,10 +283,11 @@ class AdapterTemplateTests(SimpleTestCase):
         self.assertIs(kwargs["enable_thinking"], False)
         self.assertNotIn("chat_template", kwargs)
 
-    def test_llama_sends_its_template_and_no_thinking_flag(self):
+    def test_llama_sends_neither(self):
+        """No chat_template override reaches the tokenizer any more."""
         kwargs = self.apply("llama")
 
-        self.assertEqual(kwargs["chat_template"], SPECS["llama"].chat_template)
+        self.assertNotIn("chat_template", kwargs)
         self.assertNotIn("enable_thinking", kwargs)
 
     def test_mistral_sends_neither(self):

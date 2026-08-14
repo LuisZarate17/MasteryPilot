@@ -125,17 +125,6 @@ RAG_INSTRUCTION = (
     "relevant, ignore it."
 )
 
-# LLaMA is driven through a hand-written template rather than the tokenizer's
-# own. Llama-3.2-Instruct ships a perfectly good chat template, so this is
-# almost certainly wrong — but confirming that needs the weights and a GPU, and
-# an unverifiable behaviour change is worse than a documented oddity. Preserved
-# verbatim from the pre-consolidation languagemodel_llama.py.
-_LLAMA_CHAT_TEMPLATE = (
-    "{% for message in messages %}<|{{ message['role'] }}|>\n"
-    "{{ message['content'] }}\n{% endfor %}<|assistant|>\n"
-)
-
-
 @dataclass(frozen=True)
 class ModelSpec:
     """Everything that differs between the supported model families."""
@@ -171,11 +160,23 @@ SPECS = {
         name="mistral",
         default_model_id="mistralai/Mistral-7B-Instruct-v0.3",
     ),
+    # Uses the tokenizer's own chat template, like the other two. It used to
+    # override it with a hand-written "<|role|>" one carried over from the
+    # pre-consolidation languagemodel_llama.py, which the 2026-08-13 live run
+    # showed was wrong: none of <|system|>, <|user|> or <|assistant|> is a token
+    # in Llama-3.2's vocabulary, which uses <|start_header_id|>…<|end_header_id|>
+    # and <|eot_id|>. The model was being handed role markers it had never seen
+    # as ordinary text, with no turn boundaries, and answered an introduction
+    # request by echoing the system prompt back in a loop. The same weights
+    # under the tokenizer's own template introduced themselves normally.
+    #
+    # truncate_at="<|" went with it. It existed to cut the fabricated turns the
+    # hand-written template invited; with real turn boundaries there are none to
+    # cut, and against Llama-3.2 it would truncate at the model's own special
+    # tokens.
     "llama": ModelSpec(
         name="llama",
         default_model_id="meta-llama/Llama-3.2-1B-Instruct",
-        chat_template=_LLAMA_CHAT_TEMPLATE,
-        truncate_at="<|",
     ),
 }
 
