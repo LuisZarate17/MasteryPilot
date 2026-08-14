@@ -181,10 +181,10 @@ what was fixed.
   questions. One keyed "15% of 200" as 25 while listing 30 among the options,
   so a student who answers correctly is marked wrong. Teachers should review
   generated quizzes.
-- **The tutor loses its place when a student changes topic mid-session.** Over
-  20 scripted runs, 14 finished clean; the failures are concentrated in one
-  case, where the student abandons a problem and then asks for direction rather
-  than answering.
+- **The tutor sometimes loses its place in a problem.** Over 20 scripted runs
+  of four conversation shapes, 17 finish clean. What remains is mostly a
+  student answering incorrectly and the tutor re-asking its question rather
+  than correcting the mistake.
 - **Only Qwen3-4B is exercised regularly.** Mistral and LLaMA load and generate
   correctly, but the licence-gated checkpoints named above have not been run —
   ungated mirrors of the same weights were used instead.
