@@ -13,6 +13,7 @@ arithmetic under test is the threshold and sentinel handling, not FAISS.
 import json
 import os
 import tempfile
+import unittest.mock as mock
 
 from django.test import SimpleTestCase
 
@@ -36,6 +37,75 @@ class RagTestCase(SimpleTestCase):
 
     def tearDown(self):
         rag.default_index = self._saved_default
+
+
+class ThinExtractionTests(RagTestCase):
+    """A file that ingests as nothing must not look like a successful upload.
+
+    The case this exists for: a two-page image-only PDF extracted to 174
+    characters of page headers, produced one chunk, and was silently absent
+    from retrieval. There is no OCR, so a district scanning textbook pages
+    would hit it immediately, and nothing anywhere said so.
+    """
+
+    def pieces(self, text):
+        return [(text, "", "")]
+
+    def test_length_sums_every_piece(self):
+        pieces = [("aaa", "", ""), ("bbbb", "/title", "heading\n")]
+
+        self.assertEqual(rag.extracted_length(pieces), 7)
+
+    def test_length_ignores_surrounding_whitespace(self):
+        self.assertEqual(rag.extracted_length([("  ab  \n", "", "")]), 2)
+
+    def test_an_empty_file_is_reported_as_nothing_extracted(self):
+        with mock.patch("builtins.print") as printed:
+            total = rag.report_thin_extraction("scan.pdf", self.pieces(""))
+
+        self.assertEqual(total, 0)
+        message = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("scan.pdf", message)
+        self.assertIn("no text extracted", message)
+
+    def test_a_scanned_pdf_is_reported_with_its_character_count(self):
+        """174 characters over two pages is the calibration case."""
+        with mock.patch("builtins.print") as printed:
+            total = rag.report_thin_extraction("scan.pdf", self.pieces("x" * 174))
+
+        self.assertEqual(total, 174)
+        message = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        self.assertIn("174", message)
+        self.assertIn("OCR", message)
+
+    def test_a_real_document_is_not_reported(self):
+        with mock.patch("builtins.print") as printed:
+            total = rag.report_thin_extraction("lesson.txt", self.pieces("x" * 900))
+
+        self.assertEqual(total, 900)
+        self.assertEqual(printed.call_args_list, [])
+
+    def test_the_floor_is_exclusive(self):
+        """Exactly at the floor counts as enough, so the boundary is pinned."""
+        with mock.patch("builtins.print") as printed:
+            rag.report_thin_extraction(
+                "edge.txt", self.pieces("x" * rag.THIN_EXTRACTION_CHARS)
+            )
+
+        self.assertEqual(printed.call_args_list, [])
+
+    def test_loading_a_thin_file_warns_and_still_indexes_what_it_found(self):
+        """The warning is a warning, not a refusal — 174 characters still index."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "scan.txt"), "w", encoding="utf-8") as handle:
+                handle.write("Page 1 header")
+
+            with mock.patch("builtins.print") as printed:
+                rag.default_index.add_documents = lambda chunks: None
+                rag.default_index.load_files(tmp)
+
+            message = " ".join(str(c.args[0]) for c in printed.call_args_list)
+            self.assertIn("scan.txt", message)
 
 
 class ChunkTextTests(RagTestCase):

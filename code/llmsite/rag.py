@@ -381,6 +381,50 @@ EXTRACTORS = {
 }
 
 
+# Below this many characters, a file has not really been read. Calibrated on
+# the case that prompted it: a two-page image-only PDF that yielded 174
+# characters of page headers and nothing else. Prose of any substance clears
+# this comfortably — a single paragraph is usually 300-600.
+THIN_EXTRACTION_CHARS = 200
+
+
+def extracted_length(pieces):
+    """Total characters an extractor produced for one file."""
+    return sum(len(text.strip()) for text, _suffix, _prefix in pieces if text)
+
+
+def report_thin_extraction(filepath, pieces, floor=THIN_EXTRACTION_CHARS):
+    """Warn when a file was accepted but yielded no usable text.
+
+    There is no OCR here, so a scanned PDF extracts to its page headers and
+    nothing else: it uploads cleanly, appears in the curriculum library, and is
+    absent from retrieval, with nothing anywhere saying so. A district scanning
+    textbook pages hits this on the first upload, and today it is
+    indistinguishable from success.
+
+    Two cases, deliberately distinguished. Nothing at all is usually an empty
+    or wrong-format file. A little, but not enough, is the scanned-document
+    case and the one worth naming, because the file looks fine to whoever
+    uploaded it.
+
+    Returns the character count so callers can act on it; the warning is a log
+    line because the alternative — refusing the upload — would reject
+    legitimately short files, and surfacing it in the dashboard is UI work that
+    belongs with the dashboard.
+    """
+    total = extracted_length(pieces)
+    name = os.path.basename(filepath)
+    if total == 0:
+        print(f"[RAG] {name}: no text extracted - nothing from this file is searchable.")
+    elif total < floor:
+        print(
+            f"[RAG] {name}: only {total} characters extracted, below {floor}. "
+            f"If this is a scanned or image-only document, its contents are not "
+            f"searchable - there is no OCR step."
+        )
+    return total
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sparse retrieval
 #
@@ -1038,6 +1082,7 @@ class RagIndex:
                 continue
 
             label = _rel_source(filepath, root)
+            report_thin_extraction(filepath, pieces)
             # Numbering continues per source label, so a markdown file's
             # sections stay distinguishable while a JSON file's records — which
             # each get their own label — each start again at zero.
