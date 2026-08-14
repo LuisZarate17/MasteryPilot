@@ -404,6 +404,25 @@ class ChatTests(MasteryPilotTestCase):
         for message in stored:
             self.assertNotIn("Note to the assistant", message)
 
+    def test_a_quiz_request_never_triggers_both_retries(self):
+        """At most one regeneration per message, so worst case stays bounded.
+
+        A repeated prose reply to "quiz me" is already an unparseable quiz, so
+        the quiz retry covers it — and the stall nudge asks for a tutoring step,
+        which steers the model away from the JSON the quiz retry wants.
+        """
+        DBChat.objects.create(
+            session=self.session, role="assistant", message="Same reply.",
+        )
+
+        adapter = FakeAdapter(reply="Same reply.")
+        with LoadedModel(adapter):
+            self.send("Can you quiz me on fractions?")
+
+        self.assertEqual(len(adapter.send_message_calls), 2)
+        for sent in adapter.send_message_calls:
+            self.assertNotIn("Note to the assistant", sent)
+
     def test_a_normal_reply_is_not_regenerated(self):
         DBChat.objects.create(
             session=self.session, role="assistant", message="Subtract 7 from both sides.",

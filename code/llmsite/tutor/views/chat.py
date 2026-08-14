@@ -426,7 +426,15 @@ def api_chat(request):
             # answering. The prompt now forbids it, but the prompt forbade
             # several things it went on to do, so this checks. One regeneration
             # on the failure path only.
-            if _is_stalled(assistant_reply_text, previous):
+            #
+            # Skipped for quiz requests, and not only to bound the work at two
+            # generations. A repeated prose reply to "quiz me" is already an
+            # unparseable quiz, so the retry below catches it — and STALL_NUDGE
+            # asks for "the specific next operation to perform, then one short
+            # question", which steers the model away from emitting JSON. The
+            # two retries would fight each other.
+            if not _looks_like_quiz_request(msg) and _is_stalled(
+                    assistant_reply_text, previous):
                 print("[api_chat] reply repeated the previous one - retrying once")
                 nudged, _ = _adapter().send_message(
                     model, tokenizer, list(history), f"{msg}\n\n{STALL_NUDGE}",

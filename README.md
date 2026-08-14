@@ -113,7 +113,9 @@ for older cards.
 The model itself is downloaded from Hugging Face on the first chat message —
 about 8 GB for the default Qwen3-4B — so the first response after a fresh
 install takes a while. On an RTX 5070 Ti it then occupies roughly 4.1 GB of
-VRAM and answers in about 1.3 seconds per message.
+VRAM and answers in about 1.3 seconds per message — roughly double that on the
+turns where the server regenerates a reply, which it does at most once, when a
+quiz request comes back unparseable or the tutor repeats itself.
 
 ### Model add-ons
 
@@ -191,7 +193,8 @@ what was fixed.
   correctly, but the licence-gated checkpoints named above have not been run —
   ungated mirrors of the same weights were used instead.
 - Responses are not streamed, so the student waits for the whole reply. About
-  1.3 seconds per message on the reference GPU.
+  1.3 seconds per message on the reference GPU, or about double that on the
+  turns where the server regenerates a reply.
 - SQLite and Django's development server are the defaults. Neither is sized for
   more than a classroom.
 
