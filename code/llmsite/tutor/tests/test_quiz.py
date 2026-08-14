@@ -16,7 +16,12 @@ from django.urls import reverse
 import json
 
 from ..models import Quiz, QuizAnswer
-from ..views.chat import _maybe_persist_quiz, _try_extract_quiz_json
+from ..views.chat import (
+    _looks_like_quiz_request,
+    _maybe_persist_quiz,
+    _try_extract_quiz_json,
+    shuffle_quiz,
+)
 from .base import MasteryPilotTestCase
 
 
@@ -313,3 +318,153 @@ class QuizPersistenceTests(MasteryPilotTestCase):
         self.assertEqual(first.status, "submitted")
         self.assertIsNotNone(first.ended_at)
         self.assertEqual(Quiz.objects.filter(session=self.session, status="active").count(), 1)
+
+    def test_the_stored_quiz_is_returned_as_canonical_text(self):
+        """The caller must send on what was stored, not the model's raw reply.
+
+        The options are shuffled during persistence, so the two disagree about
+        which index is correct. Showing the student the raw reply while grading
+        against the stored quiz marks right answers wrong.
+        """
+        canonical = _maybe_persist_quiz(
+            self.session,
+            '{"test": {"q1": {"question": "2+2?", "type": "multiple-choice",'
+            ' "answers": ["4", "5", "6", "7"], "correct": "0"}}}',
+        )
+        stored = Quiz.objects.get(session=self.session, status="active")
+
+        self.assertEqual(json.loads(canonical), stored.quiz_json)
+
+    def test_the_shuffled_correct_index_still_points_at_the_right_answer(self):
+        _maybe_persist_quiz(
+            self.session,
+            '{"test": {"q1": {"question": "2+2?", "type": "multiple-choice",'
+            ' "answers": ["4", "5", "6", "7"], "correct": "0"}}}',
+        )
+        item = Quiz.objects.get(session=self.session).quiz_json["test"]["q1"]
+
+        self.assertEqual(item["answers"][int(item["correct"])], "4")
+
+
+class QuizShuffleTests(MasteryPilotTestCase):
+    """Answer order is randomised so the first option is not usually right.
+
+    Measured 2026-08-13: the correct answer sat at index 0 in 9 of 13 quizzes
+    (11 of 12 on Qwen3-8B), so always picking the first option scored ~70%.
+    """
+
+    class FixedRng:
+        """A deterministic stand-in: reverses instead of shuffling."""
+
+        @staticmethod
+        def shuffle(seq):
+            seq.reverse()
+
+    def question(self, correct="0", answers=None):
+        return {
+            "test": {
+                "q1": {
+                    "question": "2+2?",
+                    "type": "multiple-choice",
+                    "answers": answers if answers is not None else ["4", "5", "6", "7"],
+                    "correct": correct,
+                }
+            }
+        }
+
+    def test_the_correct_answer_moves_with_its_options(self):
+        out = shuffle_quiz(self.question(correct="0"), rng=self.FixedRng)["test"]["q1"]
+
+        self.assertEqual(out["answers"], ["7", "6", "5", "4"])
+        self.assertEqual(out["correct"], "3")
+        self.assertEqual(out["answers"][int(out["correct"])], "4")
+
+    def test_the_right_answer_text_survives_every_starting_position(self):
+        for index in range(4):
+            with self.subTest(correct=index):
+                original = self.question(correct=str(index))
+                was = original["test"]["q1"]["answers"][index]
+
+                out = shuffle_quiz(original, rng=self.FixedRng)["test"]["q1"]
+
+                self.assertEqual(out["answers"][int(out["correct"])], was)
+
+    def test_a_real_shuffle_does_not_leave_the_answer_pinned_to_index_zero(self):
+        """The point of the exercise, over enough draws to be meaningful."""
+        positions = {
+            shuffle_quiz(self.question(correct="0"))["test"]["q1"]["correct"]
+            for _ in range(40)
+        }
+
+        self.assertGreater(len(positions), 1)
+
+    def test_the_input_is_not_mutated(self):
+        original = self.question(correct="0")
+
+        shuffle_quiz(original, rng=self.FixedRng)
+
+        self.assertEqual(original["test"]["q1"]["answers"], ["4", "5", "6", "7"])
+        self.assertEqual(original["test"]["q1"]["correct"], "0")
+
+    def test_a_short_answer_question_is_left_alone(self):
+        quiz = {"test": {"q1": {"question": "2+2?", "type": "short-answer",
+                                "correct": "four"}}}
+
+        self.assertEqual(shuffle_quiz(quiz, rng=self.FixedRng), quiz)
+
+    def test_a_non_numeric_correct_value_is_left_alone(self):
+        """Grading falls back to string comparison; reordering would break it."""
+        quiz = self.question(correct="four")
+
+        out = shuffle_quiz(quiz, rng=self.FixedRng)["test"]["q1"]
+
+        self.assertEqual(out["answers"], ["4", "5", "6", "7"])
+        self.assertEqual(out["correct"], "four")
+
+    def test_an_out_of_range_index_is_left_alone(self):
+        out = shuffle_quiz(self.question(correct="9"), rng=self.FixedRng)["test"]["q1"]
+
+        self.assertEqual(out["answers"], ["4", "5", "6", "7"])
+        self.assertEqual(out["correct"], "9")
+
+    def test_a_single_option_is_left_alone(self):
+        out = shuffle_quiz(
+            self.question(correct="0", answers=["only"]), rng=self.FixedRng
+        )["test"]["q1"]
+
+        self.assertEqual(out["answers"], ["only"])
+        self.assertEqual(out["correct"], "0")
+
+    def test_every_question_is_shuffled_not_just_the_first(self):
+        quiz = {"test": {
+            "q1": {"type": "multiple-choice", "answers": ["a", "b"], "correct": "0"},
+            "q2": {"type": "multiple-choice", "answers": ["c", "d"], "correct": "0"},
+        }}
+
+        out = shuffle_quiz(quiz, rng=self.FixedRng)["test"]
+
+        self.assertEqual(out["q1"]["correct"], "1")
+        self.assertEqual(out["q2"]["correct"], "1")
+
+
+class QuizRequestDetectionTests(MasteryPilotTestCase):
+    """Used only to decide whether an unparseable reply is worth regenerating."""
+
+    def test_the_phrasings_that_failed_live_are_recognised(self):
+        for text in ["Test me on combining like terms.",
+                     "Test my knowledge of the distributive property.",
+                     "Could you test me on solving for x?"]:
+            with self.subTest(text=text):
+                self.assertTrue(_looks_like_quiz_request(text))
+
+    def test_ordinary_quiz_wording_is_recognised(self):
+        for text in ["quiz me", "Can I have a quiz?", "practice questions please",
+                     "check my understanding of slope"]:
+            with self.subTest(text=text):
+                self.assertTrue(_looks_like_quiz_request(text))
+
+    def test_ordinary_tutoring_is_not(self):
+        for text in ["I need help solving 3x + 7 = 22.", "Continue",
+                     "Why did you subtract that?", ""]:
+            with self.subTest(text=text):
+                self.assertFalse(_looks_like_quiz_request(text))

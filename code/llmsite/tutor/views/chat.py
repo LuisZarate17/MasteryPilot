@@ -7,6 +7,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 import json
+import random
 import re
 
 from ..models import Chat as DBChat, Quiz, QuizAnswer, Session
@@ -158,16 +159,77 @@ def _try_extract_quiz_json(text: str):
     return None
 
 
+# Phrasings that mean "give me a quiz". Used only to decide whether an
+# unparseable reply is worth regenerating, so over-matching costs one extra
+# generation and under-matching costs nothing that was not already broken.
+_QUIZ_REQUEST = re.compile(
+    r"\b(quiz|test me|test my|practice (question|problem)s?|assessment"
+    r"|check my (understanding|knowledge))\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_quiz_request(text: str) -> bool:
+    return bool(text and _QUIZ_REQUEST.search(text))
+
+
+def shuffle_quiz(quiz_json, rng=None):
+    """Randomise answer order and move `correct` to follow it.
+
+    Measured 2026-08-13: the model put the correct answer first in 9 of 13
+    quizzes (11 of 12 on Qwen3-8B), so a student who always picked the first
+    option scored about 70% without reading the question. Instructing the model
+    to vary the position is a request a 4B model is free to ignore, and it
+    ignored several others. This does not ask.
+
+    Only well-formed multiple-choice questions are touched: a numeric `correct`
+    that indexes the `answers` list. Anything else — a short-answer question, a
+    correct value that is answer text rather than an index, an index out of
+    range — is passed through untouched, because grading falls back to string
+    comparison for those and reordering would break it.
+    """
+    rng = rng or random
+    test = (quiz_json or {}).get("test") or {}
+    if not isinstance(test, dict):
+        return quiz_json
+
+    shuffled = {}
+    for qid, qdata in test.items():
+        qdata = dict(qdata or {})
+        answers = qdata.get("answers")
+        correct = str(qdata.get("correct", "")).strip()
+
+        if (isinstance(answers, list) and len(answers) > 1
+                and re.fullmatch(r"\d+", correct) and 0 <= int(correct) < len(answers)):
+            was = int(correct)
+            order = list(range(len(answers)))
+            rng.shuffle(order)
+            qdata["answers"] = [answers[i] for i in order]
+            # order[j] is the old index now sitting at position j, so the new
+            # home of the correct answer is wherever `was` ended up.
+            qdata["correct"] = str(order.index(was))
+
+        shuffled[qid] = qdata
+
+    return {"test": shuffled}
+
+
 def _maybe_persist_quiz(session, assistant_reply_text):
     """
     If the assistant reply parses as a quiz JSON, supersede any existing
     active quiz on this session and create a new active Quiz row so the
     grading endpoint has something to score.
-    Returns True if a quiz was persisted.
+
+    Returns the canonical JSON text of the stored quiz, or None. Callers should
+    send that text on to the student and persist it as the assistant's message:
+    the options are shuffled here, so the raw reply and the stored quiz no
+    longer agree about which index is correct, and the client grades against
+    what it was shown.
     """
     quiz_json = _try_extract_quiz_json(assistant_reply_text)
     if not quiz_json:
-        return False
+        return None
+    quiz_json = shuffle_quiz(quiz_json)
     Quiz.objects.filter(session=session, status="active").update(
         status="submitted",
         ended_at=timezone.now(),
@@ -177,7 +239,7 @@ def _maybe_persist_quiz(session, assistant_reply_text):
         status="active",
         quiz_json=quiz_json,
     )
-    return True
+    return json.dumps(quiz_json, ensure_ascii=False)
 
 
 @login_required(login_url="login")
@@ -266,10 +328,30 @@ def api_chat(request):
         assistant_reply_text = "Model unavailable. Please try again later."
         error_occurred = True
     else:
+        # send_message appends to the list it is given, so a retry needs the
+        # history as it was rather than the history plus a discarded turn.
+        history = list(chat)
         try:
             assistant_reply_text, messages = _adapter().send_message(
                 model, tokenizer, chat, msg
             )
+
+            # A quiz that does not parse fails silently: no Quiz row is written,
+            # the client renders it as an ordinary chat bubble, and the student
+            # is left with a question they cannot submit. Measured at 3 in 16.
+            # One more attempt costs a couple of seconds on the failure path
+            # only, and nothing at all on the 13 that already worked.
+            if (_looks_like_quiz_request(msg)
+                    and _try_extract_quiz_json(assistant_reply_text) is None):
+                print("[api_chat] quiz request did not produce JSON - retrying once")
+                retry_text, _ = _adapter().send_message(
+                    model, tokenizer, list(history), msg
+                )
+                if _try_extract_quiz_json(retry_text) is not None:
+                    assistant_reply_text = retry_text
+                else:
+                    print("[api_chat] retry did not produce JSON either - "
+                          "sending the prose reply")
         except Exception as e:
             print(f"[api_chat] send_message error: {e}")
             assistant_reply_text = "Model error, please try again later."
@@ -303,11 +385,18 @@ def api_chat(request):
 
             DBChat.objects.create(session=session, role="user", message=msg)
             if not error_occurred and assistant_reply_text:
-                DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+                # Persist the quiz first: it shuffles the options, so the text
+                # stored as the assistant's message has to be the stored quiz
+                # rather than the raw reply. Otherwise the student is shown one
+                # ordering and graded against another, and the history view
+                # disagrees with both.
                 try:
-                    _maybe_persist_quiz(session, assistant_reply_text)
+                    canonical = _maybe_persist_quiz(session, assistant_reply_text)
+                    if canonical:
+                        assistant_reply_text = canonical
                 except Exception as qe:
                     print(f"[api_chat] Quiz persistence error: {qe}")
+                DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
