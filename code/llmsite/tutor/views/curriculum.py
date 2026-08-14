@@ -16,6 +16,7 @@ import re
 
 from ..models import Chat as DBChat, Session, StudentProfile, TeacherProfile
 from ..utils import is_admin, is_teacher_or_admin
+from .chat import _is_bootstrap_user_message
 
 
 # Extension -> content types a browser might plausibly send for it.
@@ -188,12 +189,27 @@ def api_export_chats(request):
         Session.objects.filter(owner=target_user).order_by("created_at", "id")
     )
     session_ids = [s.id for s in sessions]
-    chats = (
-        DBChat.objects
-        .filter(session_id__in=session_ids)
-        .select_related("session")
-        .order_by("session__created_at", "created_at", "id")
-    )
+    # Export what the student and the tutor actually said, matching what
+    # api_session_messages shows on screen.
+    #
+    # Two kinds of row are backend scaffolding rather than conversation. The
+    # system prompt is stored once per session and is byte-identical every
+    # time — a 330-message export of 64 sessions was 62% repetitions of the
+    # same 2,608 characters — and it lives in source, so exporting it tells a
+    # teacher nothing while making the file harder to read. The bootstrap turn
+    # is persisted with role="user" so the model sees the conversation it had,
+    # but the student never typed it.
+    chats = [
+        chat
+        for chat in (
+            DBChat.objects
+            .filter(session_id__in=session_ids)
+            .exclude(role="system")
+            .select_related("session")
+            .order_by("session__created_at", "created_at", "id")
+        )
+        if not (chat.role == "user" and _is_bootstrap_user_message(chat.message))
+    ]
 
     exported_at = timezone.now()
     exported_at_iso = exported_at.isoformat()

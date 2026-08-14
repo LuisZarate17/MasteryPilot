@@ -54,3 +54,66 @@ class ExportChatTests(MasteryPilotTestCase):
         response = self.client.get(url, {"student_id": self.student_user.id, "format": "csv"})
 
         self.assertEqual(response.status_code, 403)
+
+
+class ExportScaffoldingTests(MasteryPilotTestCase):
+    """Backend scaffolding must not reach the export.
+
+    A live export of 64 sessions was 62% repetitions of the same system prompt,
+    because api_export_chats applied no role filter while api_session_messages
+    filtered these same two kinds of row for display.
+    """
+
+    BOOTSTRAP = (
+        "Here is your student information:\nName: Ada\nSchool: WSU\n"
+        "Grade: 11\nCurrent Classes: Algebra"
+    )
+
+    def setUp(self):
+        self.admin_user = self.make_admin("admin_scaffold")
+        self.student_user = self.make_student("student_scaffold")
+        self.session = self.make_session(self.student_user, title="Fractions")
+        self.make_chat(self.session, "system", "THE TUTOR SYSTEM PROMPT")
+        self.make_chat(self.session, "user", self.BOOTSTRAP)
+        self.make_chat(self.session, "assistant", "Hello, Ada.")
+        self.make_chat(self.session, "user", "What is a fraction?")
+        self.make_chat(self.session, "assistant", "A fraction is a part of a whole.")
+        self.client.force_login(self.admin_user)
+
+    def export(self, fmt):
+        return self.client.get(
+            reverse("api_export_chats"),
+            {"student_id": self.student_user.id, "format": fmt},
+        )
+
+    def test_csv_omits_the_system_prompt_and_the_bootstrap_turn(self):
+        text = self.export("csv").content.decode("utf-8")
+
+        self.assertNotIn("THE TUTOR SYSTEM PROMPT", text)
+        self.assertNotIn("Here is your student information", text)
+
+    def test_csv_keeps_the_real_conversation(self):
+        text = self.export("csv").content.decode("utf-8")
+
+        self.assertIn("What is a fraction?", text)
+        self.assertIn("A fraction is a part of a whole.", text)
+        self.assertIn("Hello, Ada.", text)
+
+    def test_json_carries_only_the_three_real_turns(self):
+        payload = json.loads(self.export("json").content.decode("utf-8"))
+        messages = payload["sessions"][0]["messages"]
+
+        self.assertEqual(len(messages), 3)
+        self.assertEqual([m["role"] for m in messages],
+                         ["assistant", "user", "assistant"])
+        self.assertNotIn("system", [m["role"] for m in messages])
+
+    def test_a_session_of_pure_scaffolding_exports_no_messages(self):
+        empty = self.make_session(self.student_user, title="Never used")
+        self.make_chat(empty, "system", "THE TUTOR SYSTEM PROMPT")
+        self.make_chat(empty, "user", self.BOOTSTRAP)
+
+        payload = json.loads(self.export("json").content.decode("utf-8"))
+        by_title = {s["title"]: s for s in payload["sessions"]}
+
+        self.assertEqual(by_title["Never used"]["messages"], [])
