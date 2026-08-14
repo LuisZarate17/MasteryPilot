@@ -349,6 +349,70 @@ class ChatTests(MasteryPilotTestCase):
             self.session.progress_ledger, ["Start with the multiplication."]
         )
 
+    def test_a_repeated_reply_is_regenerated_once(self):
+        """The tutor's commonest measured failure is re-sending its last turn."""
+        DBChat.objects.create(
+            session=self.session, role="assistant",
+            message="What is the next step in solving 7 + 2 * 3?",
+        )
+
+        class Repeating(FakeAdapter):
+            """Stalls first, helps when nudged."""
+
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+                self.send_message_calls.append(new_message)
+                self.ledgers_seen.append(list(ledger or []))
+                if "Note to the assistant" in new_message:
+                    reply = "Multiply 2 by 3 first. What does that give you?"
+                else:
+                    reply = "What is the next step in solving 7 + 2 * 3?"
+                return reply, list(messages)
+
+        adapter = Repeating()
+        with LoadedModel(adapter):
+            response = self.send("What do I do first?")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["model_text"],
+            "Multiply 2 by 3 first. What does that give you?",
+        )
+        self.assertEqual(len(adapter.send_message_calls), 2)
+
+    def test_the_nudge_never_reaches_the_database(self):
+        """It is a note to the model, not something the student typed."""
+        DBChat.objects.create(
+            session=self.session, role="assistant", message="Same reply.",
+        )
+
+        class Stubborn(FakeAdapter):
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+                self.send_message_calls.append(new_message)
+                self.ledgers_seen.append(list(ledger or []))
+                return "Same reply.", list(messages)
+
+        with LoadedModel(Stubborn()):
+            self.send("What do I do first?")
+
+        stored = list(
+            DBChat.objects.filter(session=self.session, role="user")
+            .values_list("message", flat=True)
+        )
+        self.assertIn("What do I do first?", stored)
+        for message in stored:
+            self.assertNotIn("Note to the assistant", message)
+
+    def test_a_normal_reply_is_not_regenerated(self):
+        DBChat.objects.create(
+            session=self.session, role="assistant", message="Subtract 7 from both sides.",
+        )
+
+        adapter = FakeAdapter(reply="Now divide both sides by 3.")
+        with LoadedModel(adapter):
+            self.send("15")
+
+        self.assertEqual(len(adapter.send_message_calls), 1)
+
     def test_an_ordinary_turn_keeps_the_recorded_steps(self):
         self.session.progress_ledger = ["Subtract 7 from both sides."]
         self.session.save(update_fields=["progress_ledger"])

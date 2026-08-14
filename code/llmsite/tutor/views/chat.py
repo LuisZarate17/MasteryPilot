@@ -192,6 +192,44 @@ def _looks_like_topic_change(text: str) -> bool:
     return bool(text and _TOPIC_CHANGE.search(text))
 
 
+# Two replies this similar are the same reply. The measured failure is literal:
+# the tutor re-sent its previous turn word for word when the student asked
+# "what do I do first?" instead of answering.
+STALL_RATIO = 0.95
+
+# Appended to the student's message on the one retry. Written as a note to the
+# assistant rather than as words the student said; the same fold the curriculum
+# context and the ledger use, and it never reaches the database - api_chat
+# persists the student's own message, and the retry runs on a copy of history.
+STALL_NUDGE = (
+    "[Note to the assistant: your previous reply did not help the student move "
+    "forward, and repeating it will not either. Do not repeat it. Name the "
+    "specific next operation to perform, or give a worked example of the same "
+    "kind of step, then ask one short question.]"
+)
+
+
+def _last_assistant_message(messages):
+    for message in reversed(messages or ()):
+        if message.get("role") == "assistant":
+            return message.get("content") or ""
+    return ""
+
+
+def _is_stalled(reply, previous, ratio=STALL_RATIO):
+    """True when this reply repeats the previous one.
+
+    Uses difflib rather than equality because the model paraphrases itself:
+    "What is the next step in solving 7 + 2 * 3?" against the identical
+    question with one word moved is the same failure.
+    """
+    if not reply or not previous:
+        return False
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, reply.strip(), previous.strip()).ratio() >= ratio
+
+
 def shuffle_quiz(quiz_json, rng=None):
     """Randomise answer order and move `correct` to follow it.
 
@@ -372,6 +410,23 @@ def api_chat(request):
             assistant_reply_text, messages = _adapter().send_message(
                 model, tokenizer, chat, msg, ledger=ledger
             )
+
+            # The tutor's commonest failure is repeating its previous reply
+            # word for word when the student asks for direction instead of
+            # answering. The prompt now forbids it, but the prompt forbade
+            # several things it went on to do, so this checks. One regeneration
+            # on the failure path only.
+            previous = _last_assistant_message(history)
+            if _is_stalled(assistant_reply_text, previous):
+                print("[api_chat] reply repeated the previous one - retrying once")
+                nudged, _ = _adapter().send_message(
+                    model, tokenizer, list(history), f"{msg}\n\n{STALL_NUDGE}",
+                    ledger=ledger,
+                )
+                if nudged and not _is_stalled(nudged, previous):
+                    assistant_reply_text = nudged
+                else:
+                    print("[api_chat] retry repeated it too - sending as is")
 
             # A quiz that does not parse fails silently: no Quiz row is written,
             # the client renders it as an ordinary chat bubble, and the student
