@@ -11,6 +11,19 @@ class Session(models.Model):
     owner = models.ForeignKey(get_user_model(), on_delete=models.CASCADE, related_name="sessions")
     title = models.CharField(max_length=200, default="New session")
     created_at = models.DateTimeField(auto_now_add=True)
+    # Steps the tutor has already taught in this session, oldest first, as
+    # short plain-text lines.
+    #
+    # The tutor holds no state of its own: it re-derives where it is by reading
+    # the transcript every turn, and measurement showed it is good at following
+    # position it is *told* and bad at position it must *infer*. Across 12
+    # scripted runs it repeated its previous reply verbatim 7 times, worst when
+    # the student answered incorrectly. This is what it gets told instead.
+    #
+    # A list of strings rather than a related model: it is written once per
+    # turn, read whole, never queried across sessions, and dies with the
+    # session. A table would buy nothing.
+    progress_ledger = models.JSONField(default=list, blank=True)
 
 
 class Chat(models.Model):

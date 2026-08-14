@@ -286,6 +286,79 @@ class ChatTests(MasteryPilotTestCase):
             [("user", "How do I solve x + 3 = 8?"), ("assistant", "Subtract three.")],
         )
 
+    def test_the_step_taught_is_recorded_on_the_session(self):
+        with LoadedModel(FakeAdapter(reply="Subtract 7 from both sides. What is 15 / 3?")):
+            self.send("How do I solve 3x + 7 = 22?")
+
+        self.session.refresh_from_db()
+        self.assertEqual(
+            self.session.progress_ledger, ["Subtract 7 from both sides."]
+        )
+
+    def test_the_recorded_steps_are_handed_back_on_the_next_turn(self):
+        """The point of the ledger: the tutor is told where it is."""
+        with LoadedModel(FakeAdapter(reply="Subtract 7 from both sides.")):
+            self.send("How do I solve 3x + 7 = 22?")
+
+        adapter = FakeAdapter(reply="Now divide by 3.")
+        with LoadedModel(adapter):
+            self.send("15")
+
+        self.assertEqual(adapter.ledgers_seen, [["Subtract 7 from both sides."]])
+
+    def test_the_first_turn_of_a_session_carries_an_empty_ledger(self):
+        adapter = FakeAdapter(reply="Subtract 7.")
+        with LoadedModel(adapter):
+            self.send("How do I solve 3x + 7 = 22?")
+
+        self.assertEqual(adapter.ledgers_seen, [[]])
+
+    def test_a_quiz_reply_is_not_recorded_as_a_step(self):
+        """A quiz is not a step, and its JSON would be noise in the ledger."""
+        quiz = ('{"test": {"q1": {"question": "2+2?", "type": "multiple-choice",'
+                ' "answers": ["4", "5"], "correct": "0"}}}')
+        with LoadedModel(FakeAdapter(reply=quiz)):
+            self.send("Give me a quiz.")
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.progress_ledger, [])
+
+    def test_a_failed_turn_records_nothing(self):
+        with UnloadedModel():
+            self.send("How do I solve 3x + 7 = 22?")
+
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.progress_ledger, [])
+
+    def test_abandoning_the_problem_clears_the_recorded_steps(self):
+        """Otherwise the tutor keeps teaching the problem the student left.
+
+        Measured: with the ledger and without this, abandon-and-switch fell
+        from 2 clean runs in 3 to 1 in 5, stalling on the old problem.
+        """
+        self.session.progress_ledger = ["Subtract 7 from both sides."]
+        self.session.save(update_fields=["progress_ledger"])
+
+        adapter = FakeAdapter(reply="Start with the multiplication.")
+        with LoadedModel(adapter):
+            self.send("Actually forget that, can you help me with 7 + 2 * 3 instead?")
+
+        self.assertEqual(adapter.ledgers_seen, [[]])
+        self.session.refresh_from_db()
+        self.assertEqual(
+            self.session.progress_ledger, ["Start with the multiplication."]
+        )
+
+    def test_an_ordinary_turn_keeps_the_recorded_steps(self):
+        self.session.progress_ledger = ["Subtract 7 from both sides."]
+        self.session.save(update_fields=["progress_ledger"])
+
+        adapter = FakeAdapter(reply="Now divide by 3.")
+        with LoadedModel(adapter):
+            self.send("15")
+
+        self.assertEqual(adapter.ledgers_seen, [["Subtract 7 from both sides."]])
+
     def test_an_empty_message_is_rejected(self):
         self.assertEqual(self.send("   ").status_code, 400)
 

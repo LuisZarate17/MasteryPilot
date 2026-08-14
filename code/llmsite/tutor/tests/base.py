@@ -148,6 +148,7 @@ class FakeAdapter:
         self.start_chat_calls = []
         self.send_message_calls = []
         self.derive_title_calls = []
+        self.ledgers_seen = []
 
     def init_model(self):
         return object(), object()
@@ -168,8 +169,11 @@ class FakeAdapter:
         ]
         return self._greeting, messages
 
-    def send_message(self, model, tokenizer, messages, new_message):
+    def send_message(self, model, tokenizer, messages, new_message, ledger=None):
         self.send_message_calls.append(new_message)
+        # What the view handed over as already-taught steps. Recorded rather
+        # than ignored so a test can assert the ledger reaches the adapter.
+        self.ledgers_seen.append(list(ledger or []))
         updated = list(messages) + [
             {"role": "user", "content": new_message},
             {"role": "assistant", "content": self._reply},

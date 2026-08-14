@@ -173,6 +173,25 @@ def _looks_like_quiz_request(text: str) -> bool:
     return bool(text and _QUIZ_REQUEST.search(text))
 
 
+# The student abandoning the current problem for a different one. The ledger
+# tells the tutor to continue from the last completed step, and asking it in
+# the same breath to ignore that list when the topic changes does not work:
+# with the ledger in place, the abandon-and-switch scenario went from 2 clean
+# runs in 3 to 1 in 5, stalling on the old problem while the student asked
+# about a new one. Clearing the ledger enforces server-side what the prompt
+# could only request.
+_TOPIC_CHANGE = re.compile(
+    r"\b(forget (that|it|this)|never ?mind|instead|different (problem|question)"
+    r"|new (problem|question|topic)|change (the )?(topic|subject)"
+    r"|something else|move on|let's do)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_topic_change(text: str) -> bool:
+    return bool(text and _TOPIC_CHANGE.search(text))
+
+
 def shuffle_quiz(quiz_json, rng=None):
     """Randomise answer order and move `correct` to follow it.
 
@@ -319,6 +338,24 @@ def api_chat(request):
     if chat is None:
         return HttpResponseBadRequest("No active chat, initialize first")
 
+    # The steps already taught, so the tutor is told where it is rather than
+    # having to infer it from the transcript. Read before generation, written
+    # back after it, and absent for a session that has none yet.
+    active_session = None
+    ledger = []
+    session_id = request.session.get("session_id")
+    if session_id:
+        active_session = Session.objects.filter(
+            id=session_id, owner=request.user
+        ).first()
+        if active_session:
+            ledger = active_session.progress_ledger or []
+            if ledger and _looks_like_topic_change(msg):
+                print("[api_chat] student changed problem - clearing the ledger")
+                ledger = []
+                active_session.progress_ledger = []
+                active_session.save(update_fields=["progress_ledger"])
+
     ensure_llm_initialized()
 
     assistant_reply_text = None
@@ -333,7 +370,7 @@ def api_chat(request):
         history = list(chat)
         try:
             assistant_reply_text, messages = _adapter().send_message(
-                model, tokenizer, chat, msg
+                model, tokenizer, chat, msg, ledger=ledger
             )
 
             # A quiz that does not parse fails silently: no Quiz row is written,
@@ -345,7 +382,7 @@ def api_chat(request):
                     and _try_extract_quiz_json(assistant_reply_text) is None):
                 print("[api_chat] quiz request did not produce JSON - retrying once")
                 retry_text, _ = _adapter().send_message(
-                    model, tokenizer, list(history), msg
+                    model, tokenizer, list(history), msg, ledger=ledger
                 )
                 if _try_extract_quiz_json(retry_text) is not None:
                     assistant_reply_text = retry_text
@@ -397,6 +434,20 @@ def api_chat(request):
                 except Exception as qe:
                     print(f"[api_chat] Quiz persistence error: {qe}")
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+
+                # Record the step just taught, unless the reply was a quiz —
+                # a quiz is not a step in a problem, and its JSON would fill
+                # the ledger with noise the next turn has to read past.
+                if not canonical:
+                    try:
+                        from languagemodel import extend_ledger
+
+                        session.progress_ledger = extend_ledger(
+                            session.progress_ledger, assistant_reply_text
+                        )
+                        session.save(update_fields=["progress_ledger"])
+                    except Exception as le:
+                        print(f"[api_chat] Ledger update error: {le}")
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:

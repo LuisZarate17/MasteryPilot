@@ -443,6 +443,142 @@ class StudentTurnsTests(SimpleTestCase):
         self.assertEqual(languagemodel.student_turns(None), [])
 
 
+class ProgressLedgerTests(SimpleTestCase):
+    """The tutor is told which steps it has taught instead of inferring them.
+
+    Measured over 12 scripted runs before this existed: 7 stalls, where the
+    tutor repeated its previous reply verbatim, worst when the student answered
+    incorrectly.
+    """
+
+    def test_the_step_is_kept_and_the_question_is_not(self):
+        """A question is a prompt to the student, not a step already taken.
+
+        Recording it would teach the model that asking it again is continuing.
+        """
+        step = languagemodel.condense_step(
+            "Subtract 7 from both sides to get 3x = 15. What is 15 divided by 3?"
+        )
+
+        self.assertEqual(step, "Subtract 7 from both sides to get 3x = 15.")
+
+    def test_a_reply_that_is_only_a_question_still_yields_something(self):
+        step = languagemodel.condense_step("What is 22 minus 7?")
+
+        self.assertTrue(step)
+
+    def test_an_empty_reply_records_nothing(self):
+        self.assertEqual(languagemodel.extend_ledger([], ""), [])
+        self.assertEqual(languagemodel.extend_ledger(["a"], "   "), ["a"])
+
+    def test_a_long_step_is_truncated(self):
+        step = languagemodel.condense_step("x" * 500)
+
+        self.assertLessEqual(len(step), languagemodel.LEDGER_ENTRY_CHARS + 3)
+
+    def test_a_repeat_of_the_last_step_is_not_recorded(self):
+        """The stall this exists to fix produces exactly this reply."""
+        ledger = languagemodel.extend_ledger([], "Subtract 7 from both sides.")
+        again = languagemodel.extend_ledger(ledger, "Subtract 7 from both sides.")
+
+        self.assertEqual(again, ledger)
+
+    def test_the_ledger_is_bounded(self):
+        ledger = []
+        for i in range(20):
+            ledger = languagemodel.extend_ledger(ledger, f"Step number {i}.")
+
+        self.assertEqual(len(ledger), languagemodel.LEDGER_LIMIT)
+        self.assertIn("19", ledger[-1])
+
+    def test_the_input_ledger_is_not_mutated(self):
+        original = ["one"]
+
+        languagemodel.extend_ledger(original, "two")
+
+        self.assertEqual(original, ["one"])
+
+    def test_an_empty_ledger_produces_no_message(self):
+        self.assertEqual(languagemodel.build_ledger_message([]), "")
+        self.assertEqual(languagemodel.build_ledger_message(None), "")
+
+    def test_the_message_numbers_the_steps_and_says_not_to_repeat_them(self):
+        message = languagemodel.build_ledger_message(["Subtracted 7.", "Divided by 3."])
+
+        self.assertIn("1. Subtracted 7.", message)
+        self.assertIn("2. Divided by 3.", message)
+        self.assertIn("Do not repeat", message)
+
+    def test_the_message_allows_for_a_new_problem(self):
+        """Without this the ledger makes a topic change worse, not better."""
+        message = languagemodel.build_ledger_message(["Subtracted 7."])
+
+        self.assertIn("different problem", message)
+
+
+class LedgerWiringTests(SimpleTestCase):
+    """send_message must carry the ledger without breaking Mistral's template."""
+
+    def generate_with(self, ledger):
+        adapter = get_adapter("qwen")
+        seen = {}
+
+        def fake_generate(model, tokenizer, messages, **kwargs):
+            seen["messages"] = messages
+            return "reply"
+
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        with mock.patch.object(adapter, "_generate", side_effect=fake_generate), \
+                mock.patch("rag.retrieve", return_value=[]), \
+                mock.patch("rag.build_rag_system_message", return_value=""):
+            adapter.send_message(object(), object(), messages, "next?", ledger=ledger)
+        return seen["messages"]
+
+    def test_the_ledger_reaches_the_model_on_the_student_turn(self):
+        for_generation = self.generate_with(["Subtracted 7 from both sides."])
+
+        self.assertEqual(for_generation[-1]["role"], "user")
+        self.assertIn("Subtracted 7 from both sides.", for_generation[-1]["content"])
+        self.assertIn("next?", for_generation[-1]["content"])
+
+    def test_no_system_message_is_added_after_position_zero(self):
+        """A trailing system message is what raises TemplateError on Mistral."""
+        for_generation = self.generate_with(["Subtracted 7."])
+
+        self.assertNotIn("system", [m["role"] for m in for_generation[1:]])
+
+    def test_an_absent_ledger_changes_nothing(self):
+        for_generation = self.generate_with(None)
+
+        self.assertEqual(for_generation[-1], {"role": "user", "content": "next?"})
+
+    def test_the_ledger_and_curriculum_context_coexist(self):
+        adapter = get_adapter("qwen")
+        seen = {}
+
+        with mock.patch.object(adapter, "_generate",
+                               side_effect=lambda m, t, mm, **k: seen.setdefault("m", mm) and ""), \
+                mock.patch("rag.retrieve", return_value=[]), \
+                mock.patch("rag.build_rag_system_message",
+                           return_value="[Curriculum Context]\na(b+c)=ab+ac"):
+            adapter.send_message(
+                object(), object(),
+                [{"role": "system", "content": "S"},
+                 {"role": "user", "content": "B"},
+                 {"role": "assistant", "content": "H"}],
+                "next?", ledger=["Subtracted 7."],
+            )
+
+        content = seen["m"][-1]["content"]
+        self.assertIn("a(b+c)=ab+ac", content)
+        self.assertIn("Subtracted 7.", content)
+        self.assertIn("next?", content)
+
+
 class RagContextPlacementTests(SimpleTestCase):
     """Retrieved curriculum joins the student's turn, not a trailing system one.
 

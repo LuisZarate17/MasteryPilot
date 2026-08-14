@@ -13,6 +13,7 @@ pure helpers below be unit-tested without a model.
 
 from dataclasses import dataclass
 import os
+import re
 
 # The curriculum directory is settings.CURRICULUM_ROOT, read lazily in
 # load_curriculum. It used to be a module constant pointing one level deeper
@@ -257,6 +258,77 @@ Do not include brackets, labels, or dialogue for any other speaker.
 End after the introduction."""
 
 
+# How many completed steps to carry. A tutoring problem is a handful of steps,
+# and an unbounded list would grow the prompt without bound across a long
+# session. The tail is what matters: the oldest steps are the least likely to
+# be the one being repeated.
+LEDGER_LIMIT = 8
+
+# Longest a single remembered step may be. The tutor's replies are 2-3
+# sentences and the first one is almost always the step itself; the rest is the
+# question back to the student, which is not a step and must not be recorded as
+# one.
+LEDGER_ENTRY_CHARS = 160
+
+
+def condense_step(reply: str) -> str:
+    """Reduce one tutor reply to the step it taught.
+
+    The trailing question is dropped deliberately. "What is 22 minus 7?" is a
+    prompt to the student, not something the tutor has done, and recording it
+    as a completed step is how a ledger would teach the model to repeat
+    questions rather than stop repeating them.
+    """
+    text = " ".join((reply or "").split())
+    if not text:
+        return ""
+    # Keep sentences up to the first question; those are the assertions.
+    sentences = re.findall(r"[^.!?]+[.!?]?", text)
+    kept = []
+    for sentence in sentences:
+        if sentence.strip().endswith("?"):
+            break
+        kept.append(sentence.strip())
+    step = " ".join(kept).strip() or text
+    if len(step) > LEDGER_ENTRY_CHARS:
+        step = step[:LEDGER_ENTRY_CHARS].rstrip() + "..."
+    return step
+
+
+def extend_ledger(ledger, reply: str) -> list:
+    """Return *ledger* with this reply's step appended, bounded and de-duped.
+
+    A reply identical to the last recorded step is not appended. The stall this
+    exists to fix produces exactly that, and recording it would make the ledger
+    agree with the mistake.
+    """
+    step = condense_step(reply)
+    if not step:
+        return list(ledger or [])
+    entries = list(ledger or [])
+    if entries and entries[-1] == step:
+        return entries
+    entries.append(step)
+    return entries[-LEDGER_LIMIT:]
+
+
+def build_ledger_message(ledger) -> str:
+    """The completed-steps block handed to the model, or "" when there is none."""
+    entries = [e for e in (ledger or []) if e]
+    if not entries:
+        return ""
+    lines = "\n".join(f"{i}. {e}" for i, e in enumerate(entries, 1))
+    return (
+        "Steps you have already taught the student in this session, oldest "
+        "first:\n"
+        f"{lines}\n"
+        "Do not repeat any of these steps and do not re-ask a question they "
+        "have already answered. Continue from the next step after the last "
+        "one listed. If the student has moved to a different problem, ignore "
+        "this list and start the new problem at its first step."
+    )
+
+
 def student_turns(messages) -> list:
     """The messages the student actually typed, oldest first.
 
@@ -459,8 +531,13 @@ class Adapter:
         print("Response sent")
         return assistant_text, messages
 
-    def send_message(self, model, tokenizer, messages, new_message):
-        """Answer one student message. Returns (assistant_text, messages)."""
+    def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+        """Answer one student message. Returns (assistant_text, messages).
+
+        *ledger* is the steps already taught in this session (see
+        build_ledger_message). Optional: callers without one behave exactly as
+        before.
+        """
         from rag import build_rag_system_message, build_retrieval_query, retrieve
 
         print("New message sent:", new_message)
@@ -488,11 +565,21 @@ class Adapter:
         # shallow copy and this replaces an element rather than mutating one, so
         # the persisted history still holds the clean message — the invariant
         # test_the_persisted_history_still_gets_the_clean_message pins.
+        # Both the curriculum context and the completed-step ledger ride on the
+        # student's turn, for the same reason: a system message anywhere but
+        # position 0 raises TemplateError on Mistral.
+        preamble = "\n\n".join(
+            part for part in (
+                f"{RAG_INSTRUCTION}\n\n{context_text}" if context_text else "",
+                build_ledger_message(ledger),
+            ) if part
+        )
+
         messages_for_generation = list(messages)
-        if context_text:
+        if preamble:
             messages_for_generation[-1] = {
                 "role": "user",
-                "content": f"{RAG_INSTRUCTION}\n\n{context_text}\n\n{new_message}",
+                "content": f"{preamble}\n\n{new_message}",
             }
 
         print("Generating response")
