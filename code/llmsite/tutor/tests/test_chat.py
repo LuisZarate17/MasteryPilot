@@ -359,9 +359,10 @@ class ChatTests(MasteryPilotTestCase):
         class Repeating(FakeAdapter):
             """Stalls first, helps when nudged."""
 
-            def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None):
                 self.send_message_calls.append(new_message)
                 self.ledgers_seen.append(list(ledger or []))
+                self.waiting_on_seen.append(waiting_on or "")
                 if "Note to the assistant" in new_message:
                     reply = "Multiply 2 by 3 first. What does that give you?"
                 else:
@@ -386,9 +387,10 @@ class ChatTests(MasteryPilotTestCase):
         )
 
         class Stubborn(FakeAdapter):
-            def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None):
                 self.send_message_calls.append(new_message)
                 self.ledgers_seen.append(list(ledger or []))
+                self.waiting_on_seen.append(waiting_on or "")
                 return "Same reply.", list(messages)
 
         with LoadedModel(Stubborn()):

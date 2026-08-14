@@ -406,9 +406,19 @@ def api_chat(request):
         # send_message appends to the list it is given, so a retry needs the
         # history as it was rather than the history plus a discarded turn.
         history = list(chat)
+        # The question the tutor last asked and has not had answered. Tracked
+        # apart from the ledger: a pending question is not a taught step, but
+        # it is the state of the conversation, and leaving it out entirely left
+        # the tutor with nothing to go on when a student asked for direction.
+        previous = _last_assistant_message(history)
+        waiting_on = ""
+        if not _looks_like_topic_change(msg):
+            from languagemodel import pending_question
+
+            waiting_on = pending_question(previous)
         try:
             assistant_reply_text, messages = _adapter().send_message(
-                model, tokenizer, chat, msg, ledger=ledger
+                model, tokenizer, chat, msg, ledger=ledger, waiting_on=waiting_on
             )
 
             # The tutor's commonest failure is repeating its previous reply
@@ -416,12 +426,11 @@ def api_chat(request):
             # answering. The prompt now forbids it, but the prompt forbade
             # several things it went on to do, so this checks. One regeneration
             # on the failure path only.
-            previous = _last_assistant_message(history)
             if _is_stalled(assistant_reply_text, previous):
                 print("[api_chat] reply repeated the previous one - retrying once")
                 nudged, _ = _adapter().send_message(
                     model, tokenizer, list(history), f"{msg}\n\n{STALL_NUDGE}",
-                    ledger=ledger,
+                    ledger=ledger, waiting_on=waiting_on,
                 )
                 if nudged and not _is_stalled(nudged, previous):
                     assistant_reply_text = nudged

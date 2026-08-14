@@ -462,10 +462,24 @@ class ProgressLedgerTests(SimpleTestCase):
 
         self.assertEqual(step, "Subtract 7 from both sides to get 3x = 15.")
 
-    def test_a_reply_that_is_only_a_question_still_yields_something(self):
-        step = languagemodel.condense_step("What is 22 minus 7?")
+    def test_a_reply_that_is_only_a_question_records_nothing(self):
+        """It taught nothing, so there is no step to remember.
 
-        self.assertTrue(step)
+        This test previously asserted the opposite, and pinned a bug: a
+        question-only reply fell back to recording the whole question, so an
+        unanswered question entered the ledger as a completed step and the next
+        turn was told to continue past it. It bit hardest right after a topic
+        change, where the ledger has just been cleared and the tutor's first
+        reply about the new problem is usually a bare question.
+        """
+        self.assertEqual(languagemodel.condense_step("What is 22 minus 7?"), "")
+        self.assertEqual(languagemodel.extend_ledger([], "What is 22 minus 7?"), [])
+
+    def test_a_question_never_enters_the_ledger_after_a_real_step(self):
+        ledger = languagemodel.extend_ledger([], "Subtract 7 from both sides.")
+        ledger = languagemodel.extend_ledger(ledger, "What is 15 divided by 3?")
+
+        self.assertEqual(ledger, ["Subtract 7 from both sides."])
 
     def test_an_empty_reply_records_nothing(self):
         self.assertEqual(languagemodel.extend_ledger([], ""), [])
@@ -497,6 +511,48 @@ class ProgressLedgerTests(SimpleTestCase):
         languagemodel.extend_ledger(original, "two")
 
         self.assertEqual(original, ["one"])
+
+    def test_the_pending_question_is_the_last_one_asked(self):
+        question = languagemodel.pending_question(
+            "Subtract 7 from both sides. What is 15 divided by 3?"
+        )
+
+        self.assertEqual(question, "What is 15 divided by 3?")
+
+    def test_a_reply_with_no_question_leaves_nothing_pending(self):
+        self.assertEqual(
+            languagemodel.pending_question("Subtract 7 from both sides."), ""
+        )
+        self.assertEqual(languagemodel.pending_question(""), "")
+
+    def test_the_pending_question_appears_without_any_taught_steps(self):
+        """The case that broke abandon-and-switch.
+
+        Straight after a topic change the ledger is empty and the tutor's first
+        reply about the new problem is usually a bare question. Recording that
+        question as a taught step made the tutor skip past it; recording
+        nothing left it with no state and it repeated itself. Neither the step
+        list nor silence is right - the pending question gets its own line.
+        """
+        message = languagemodel.build_ledger_message(
+            [], waiting_on="What is the first step for 7 + 2 * 3?"
+        )
+
+        self.assertIn("waiting for the student to answer", message)
+        self.assertIn("7 + 2 * 3", message)
+        self.assertNotIn("already taught", message)
+
+    def test_steps_and_a_pending_question_can_both_appear(self):
+        message = languagemodel.build_ledger_message(
+            ["Subtracted 7."], waiting_on="What is 15 divided by 3?"
+        )
+
+        self.assertIn("1. Subtracted 7.", message)
+        self.assertIn("What is 15 divided by 3?", message)
+
+    def test_nothing_at_all_produces_no_message(self):
+        self.assertEqual(languagemodel.build_ledger_message([], ""), "")
+        self.assertEqual(languagemodel.build_ledger_message(None, None), "")
 
     def test_an_empty_ledger_produces_no_message(self):
         self.assertEqual(languagemodel.build_ledger_message([]), "")

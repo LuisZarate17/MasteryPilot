@@ -298,7 +298,17 @@ def condense_step(reply: str) -> str:
         if sentence.strip().endswith("?"):
             break
         kept.append(sentence.strip())
-    step = " ".join(kept).strip() or text
+    # A reply that is nothing but a question taught nothing, so it records
+    # nothing. This used to fall back to the whole text, which put the
+    # unanswered question into the ledger as a completed step and then told the
+    # next turn to continue past it - the precise failure the question-stripping
+    # above exists to prevent. It bit hardest straight after a topic change,
+    # where the ledger has just been cleared and the tutor's first reply about
+    # the new problem is usually a bare question, so that question became the
+    # ledger's only entry.
+    step = " ".join(kept).strip()
+    if not step:
+        return ""
     if len(step) > LEDGER_ENTRY_CHARS:
         step = step[:LEDGER_ENTRY_CHARS].rstrip() + "..."
     return step
@@ -321,21 +331,56 @@ def extend_ledger(ledger, reply: str) -> list:
     return entries[-LEDGER_LIMIT:]
 
 
-def build_ledger_message(ledger) -> str:
-    """The completed-steps block handed to the model, or "" when there is none."""
-    entries = [e for e in (ledger or []) if e]
-    if not entries:
+def pending_question(reply: str) -> str:
+    """The question the tutor is currently waiting on, if any.
+
+    A question is not a taught step and must never be recorded as one, but it
+    is not nothing either: it is the state of the conversation. Recording it as
+    a step made the tutor skip past questions the student had not answered;
+    recording nothing at all left it with no state and it repeated itself
+    instead. Both were measured. It gets its own line.
+    """
+    text = " ".join((reply or "").split())
+    found = re.findall(r"[^.!?]*\?", text)
+    if not found:
         return ""
-    lines = "\n".join(f"{i}. {e}" for i, e in enumerate(entries, 1))
-    return (
-        "Steps you have already taught the student in this session, oldest "
-        "first:\n"
-        f"{lines}\n"
-        "Do not repeat any of these steps and do not re-ask a question they "
-        "have already answered. Continue from the next step after the last "
-        "one listed. If the student has moved to a different problem, ignore "
-        "this list and start the new problem at its first step."
+    question = found[-1].strip()
+    if len(question) > LEDGER_ENTRY_CHARS:
+        question = question[-LEDGER_ENTRY_CHARS:].lstrip()
+    return question
+
+
+def build_ledger_message(ledger, waiting_on: str = "") -> str:
+    """The conversation-state block handed to the model, or "" when empty."""
+    entries = [e for e in (ledger or []) if e]
+    waiting_on = (waiting_on or "").strip()
+    if not entries and not waiting_on:
+        return ""
+
+    parts = []
+    if entries:
+        lines = "\n".join(f"{i}. {e}" for i, e in enumerate(entries, 1))
+        parts.append(
+            "Steps you have already taught the student in this session, oldest "
+            f"first:\n{lines}\n"
+            "Do not repeat any of these steps. Continue from the next step "
+            "after the last one listed."
+        )
+    if waiting_on:
+        parts.append(
+            f"You are waiting for the student to answer this question:\n"
+            f"{waiting_on}\n"
+            "If their message answers it, say whether they are right and move "
+            "to the next step. If their message does not answer it - if they "
+            "ask what to do, say they do not know, or ask for a hint - help "
+            "them answer it by naming the specific operation to perform. Do "
+            "not ask this question again in the same words."
+        )
+    parts.append(
+        "If the student has moved to a different problem, ignore all of the "
+        "above and start the new problem at its first step."
     )
+    return "\n\n".join(parts)
 
 
 def student_turns(messages) -> list:
@@ -540,12 +585,14 @@ class Adapter:
         print("Response sent")
         return assistant_text, messages
 
-    def send_message(self, model, tokenizer, messages, new_message, ledger=None):
+    def send_message(self, model, tokenizer, messages, new_message, ledger=None,
+                     waiting_on=None):
         """Answer one student message. Returns (assistant_text, messages).
 
-        *ledger* is the steps already taught in this session (see
-        build_ledger_message). Optional: callers without one behave exactly as
-        before.
+        *ledger* is the steps already taught in this session and *waiting_on*
+        the question the tutor last asked and has not had answered (see
+        build_ledger_message). Both optional: callers without them behave
+        exactly as before.
         """
         from rag import build_rag_system_message, build_retrieval_query, retrieve
 
@@ -580,7 +627,7 @@ class Adapter:
         preamble = "\n\n".join(
             part for part in (
                 f"{RAG_INSTRUCTION}\n\n{context_text}" if context_text else "",
-                build_ledger_message(ledger),
+                build_ledger_message(ledger, waiting_on),
             ) if part
         )
 
