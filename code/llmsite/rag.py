@@ -53,15 +53,37 @@ MIN_CANDIDATES       = 20
 #
 # MIN_SCORE answers "does this corpus contain an answer at all". It has to be
 # absolute, because rejecting an off-topic question means comparing against
-# nothing. It is the one value in this module that genuinely needs a real
-# embedder to calibrate, and it has never had one.
+# nothing.
+#
+# Calibrated 2026-08-14 against two OpenStax algebra textbooks — 5,125 chunks
+# of prose nobody on this project wrote — with 25 in-corpus and 25 off-corpus
+# questions embedded by the real all-MiniLM-L6-v2:
+#
+#     in-corpus   min 0.4564   median 0.5546   max 0.7057
+#     off-corpus  max 0.4058   median 0.2368   min 0.1460
+#
+# The bands separate cleanly, and 0.45 sits in the gap: it keeps 25/25 real
+# answers and rejects 25/25 off-topic questions.
+#
+# It was 0.25, which kept every real answer and rejected only 14 of 25 —
+# "what is the capital of France?" came back with five chunks of algebra
+# textbook. An earlier measurement had found 0.25 comfortable, but that was
+# against 26 chunks of documents written for the test by the same person who
+# wrote the questions. A corpus of five thousand chunks always has something
+# that clears a low floor; a corpus of twenty-six does not. The old value was
+# calibrated on a corpus too small to be wrong.
+#
+# Being too high is the safer error. A rejected real answer leaves the tutor to
+# answer from its own knowledge, which is what it does whenever the curriculum
+# is silent. An accepted off-topic passage feeds a student algebra text in
+# reply to a question about football.
 #
 # RELATIVE_CUTOFF answers "given the best hit, which others are worth
 # including". It is a ratio, so it adapts to whatever distribution the model
 # produces instead of trusting a constant nobody measured — and it prunes hard
 # when there is a clear winner while staying lenient when everything is
 # marginal, which is the behaviour you want in both cases.
-MIN_SCORE       = 0.25  # cosine floor (0.0–1.0); below this, nothing is relevant
+MIN_SCORE       = 0.45  # cosine floor (0.0–1.0); below this, nothing is relevant
 RELATIVE_CUTOFF = 0.6   # keep dense hits scoring at least this fraction of the best
 # How much of the conversation joins the query, so follow-ups like "why?" are
 # retrieved against what is being discussed rather than against three words.
