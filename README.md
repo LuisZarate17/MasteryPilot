@@ -15,7 +15,9 @@ A system for school districts to create individual AI tutors for their students,
 
 ### Additional information about the project
 
-This AI tutoring system enables school districts to offer personalized learning experiences by providing students with an interactive AI tutor that adapts to their curriculum and skill level. The tutor delivers step-by-step guidance, practice exercises, and quizzes, while teachers can monitor progress, track mastery, and receive alerts if a student struggles. Built for dynamic content generation and strict privacy safeguards, the system supports multiple subjects and student profiles and is designed to scale from individual classrooms to district-wide deployment, with future plans for local LLM usage and advanced analytics dashboards.
+This AI tutoring system enables school districts to offer personalized learning experiences by providing students with an interactive AI tutor that adapts to their curriculum and skill level. The tutor delivers step-by-step guidance, practice exercises, and quizzes, while teachers can monitor progress, review transcripts, and see students flagged for intervention when their quiz average falls below a threshold. Inference runs locally against an open-weights model, so student conversations never leave the deployment. The system supports multiple subjects and student profiles.
+
+It is a capstone prototype, not a product. Read [Known Problems](#known-problems) before putting it in front of students.
 
 ## Installation
 
@@ -157,7 +159,7 @@ python manage.py migrate tutor
 3. Enter a message describing the topic or problem you want help with.
 4. The tutor will respond with one step at a time. After completing the step, ask it to continue or ask for clarification.
 5. Request quizzes by asking the tutor; it will provide them in a specially formatted quiz UI.
-6. The system maintains safeguards to prevent inappropriate content and adheres to the structured step-by-step approach.
+6. The tutor refuses inappropriate and off-topic requests, and works through problems one step at a time. Neither holds under deliberate pressure — see [Known Problems](#known-problems) for what a student can get it to do.
 
 
 ## Known Problems
