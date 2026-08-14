@@ -414,11 +414,24 @@ class Adapter:
         print("Getting curriculum context from RAG")
         context_text = build_rag_system_message(retrieve(query))
 
+        # The context is folded into the student's turn rather than appended as
+        # a trailing system message. Mistral's chat template accepts a system
+        # message only in first position and raises TemplateError on anything
+        # else, so the old shape broke every Mistral chat that retrieved
+        # anything — which is most on-topic ones. LLaMA and Qwen tolerated it,
+        # so the failure belonged to one family and to no test.
+        #
+        # Folding works under every template instead of adding a per-spec
+        # capability flag and a second code path to keep tested. The list is a
+        # shallow copy and this replaces an element rather than mutating one, so
+        # the persisted history still holds the clean message — the invariant
+        # test_the_persisted_history_still_gets_the_clean_message pins.
         messages_for_generation = list(messages)
         if context_text:
-            messages_for_generation.append(
-                {"role": "system", "content": f"{RAG_INSTRUCTION}\n\n{context_text}"}
-            )
+            messages_for_generation[-1] = {
+                "role": "user",
+                "content": f"{RAG_INSTRUCTION}\n\n{context_text}\n\n{new_message}",
+            }
 
         print("Generating response")
         assistant_text = self._generate(model, tokenizer, messages_for_generation)

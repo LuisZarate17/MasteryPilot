@@ -443,6 +443,64 @@ class StudentTurnsTests(SimpleTestCase):
         self.assertEqual(languagemodel.student_turns(None), [])
 
 
+class RagContextPlacementTests(SimpleTestCase):
+    """Retrieved curriculum joins the student's turn, not a trailing system one.
+
+    Mistral's chat template accepts a system message only in first position and
+    raises TemplateError on anything else, so appending the context as a
+    trailing system message broke every Mistral chat that retrieved anything.
+    Qwen and LLaMA tolerated it, which is why the shape survived to a live run.
+    """
+
+    def generate_with(self, context_text):
+        adapter = get_adapter("qwen")
+        seen = {}
+
+        def fake_generate(model, tokenizer, messages, **kwargs):
+            seen["messages"] = messages
+            return "reply"
+
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        with mock.patch.object(adapter, "_generate", side_effect=fake_generate), \
+                mock.patch("rag.retrieve", return_value=[]), \
+                mock.patch("rag.build_rag_system_message", return_value=context_text):
+            adapter.send_message(object(), object(), messages, "what is a fraction")
+        return seen["messages"], messages
+
+    def test_no_system_message_is_appended_after_the_conversation(self):
+        for_generation, _ = self.generate_with("[Curriculum Context]\nfractions are ...")
+
+        self.assertEqual(for_generation[-1]["role"], "user")
+        self.assertNotIn(
+            "system", [m["role"] for m in for_generation[1:]],
+            "a system message after position 0 raises TemplateError on Mistral",
+        )
+
+    def test_the_context_and_the_question_both_reach_the_model(self):
+        for_generation, _ = self.generate_with("[Curriculum Context]\nfractions are ...")
+
+        content = for_generation[-1]["content"]
+        self.assertIn("fractions are ...", content)
+        self.assertIn("what is a fraction", content)
+        self.assertIn(languagemodel.RAG_INSTRUCTION, content)
+
+    def test_the_persisted_turn_is_never_augmented(self):
+        """The student's own message must not gain curriculum text in the DB."""
+        _, persisted = self.generate_with("[Curriculum Context]\nfractions are ...")
+
+        self.assertEqual(persisted[3], {"role": "user", "content": "what is a fraction"})
+
+    def test_nothing_is_added_when_retrieval_returns_nothing(self):
+        for_generation, _ = self.generate_with("")
+
+        self.assertEqual(for_generation[-1],
+                         {"role": "user", "content": "what is a fraction"})
+
+
 class RetrievalQueryWiringTests(SimpleTestCase):
     """send_message must retrieve on the conversation, not the bare message."""
 
