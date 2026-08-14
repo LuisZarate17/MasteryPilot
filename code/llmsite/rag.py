@@ -705,7 +705,7 @@ class RagIndex:
         if self.index is not None:
             faiss.write_index(self.index, self.index_path)
         self._write_sidecar(payload)
-        print(f"[RAG] Index saved: {payload['ntotal']} vectors → {self.index_path}")
+        print(f"[RAG] Index saved: {payload['ntotal']} vectors -> {self.index_path}")
 
     def load_index(self):
         """Load FAISS index and document metadata from disk.
@@ -834,7 +834,7 @@ class RagIndex:
         n = index.ntotal
         if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
             return
-        print(f"[RAG] {n} vectors — upgrading to approximate IVF index...")
+        print(f"[RAG] {n} vectors - upgrading to approximate IVF index...")
         all_vecs = index.reconstruct_n(0, n)
         nlist = min(100, n // 10)
         width = self.get_dimension()
@@ -879,9 +879,9 @@ class RagIndex:
                 self._loaded_manifest = current
                 return
             except IndexUnusable as exc:
-                print(f"[RAG] Cached index rejected ({exc}) — rebuilding.")
+                print(f"[RAG] Cached index rejected ({exc}) - rebuilding.")
 
-        print(f"[RAG] Curriculum changed or unindexed — rebuilding from {curriculum_path} ...")
+        print(f"[RAG] Curriculum changed or unindexed - rebuilding from {curriculum_path} ...")
         self._rebuild(curriculum_path, current)
 
     def invalidate(self):

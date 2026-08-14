@@ -57,7 +57,7 @@ class Command(BaseCommand):
             )
 
             if not documents:
-                self.stdout.write(self.style.WARNING("Nothing indexed — is the directory empty?"))
+                self.stdout.write(self.style.WARNING("Nothing indexed - is the directory empty?"))
                 return
 
             if options["list"]:
@@ -75,7 +75,7 @@ class Command(BaseCommand):
         if os.path.isdir(root) and os.listdir(root):
             return root
         self.stdout.write(
-            self.style.WARNING(f"{root} is empty or absent — using the evaluation corpus instead.")
+            self.style.WARNING(f"{root} is empty or absent - using the evaluation corpus instead.")
         )
         return EVAL_CORPUS
 
