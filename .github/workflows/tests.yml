@@ -41,3 +41,58 @@ jobs:
         env:
           DJANGO_SECRET_KEY: ci-secret-key-not-used-in-deployment
         run: python -c "import rag, languagemodel; print('core-install imports OK')"
+
+  # setup.sh is the documented deployment path and had never been executed:
+  # it ends in `exec gunicorn`, and gunicorn imports fcntl, so it cannot run on
+  # the Windows machine this project is developed on. Every push already gets an
+  # Ubuntu runner, so the install-to-serving path can be exercised for free.
+  #
+  # Deliberately a separate job. It builds its own venv from scratch, which is
+  # the thing under test — reusing the test job's cached pip install would skip
+  # exactly the step most likely to break.
+  setup-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # No env vars and no .env: the script has to generate its own SECRET_KEY
+      # and write its own .env, which is what a first-time operator gets. stdin
+      # is not a tty here, so the ADMIN_PASS prompt is skipped and no admin
+      # account is created — fine, nothing below logs in.
+      - name: Install and serve
+        run: |
+          set -euo pipefail
+
+          ./setup.sh --serve &
+          SERVER_PID=$!
+          trap 'kill "${SERVER_PID}" 2>/dev/null || true' EXIT
+
+          # Poll rather than sleep: the venv build dominates and its duration
+          # varies. Fail loudly if the port never opens.
+          for _ in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:8000/login/; then
+              echo "server is answering"
+              break
+            fi
+            if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+              echo "setup.sh exited before the server came up" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
+          # Unauthenticated / redirects to the login page. Asserting the status
+          # codes rather than just "something answered" catches a server that
+          # boots but has no URLconf.
+          root_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/)"
+          login_status="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/login/)"
+          echo "/ -> ${root_status}, /login/ -> ${login_status}"
+
+          test "${root_status}" = "302"
+          test "${login_status}" = "200"

@@ -1,7 +1,18 @@
-# Progress Tracker Implementation - Complete
+# Progress Tracker Implementation
+
+How student progress is computed and cached. Written during implementation, so
+it reads as a build log rather than a reference — but the design it describes is
+still what the code does: `calculate_student_progress()` in `tutor/utils.py`
+weights quiz performance at 70% and session activity at 30%, capping the session
+component at 10 sessions.
+
+One correction since it was written: the quiz component was divided by 100 twice,
+so a student with every answer correct scored 0.7 instead of 70. Fixed in Phase 6
+and covered by `tutor/tests/test_progress.py`.
 
 ## Overview
-Implemented a comprehensive progress tracking system for students with Option C calculation approach (70% quiz performance + 30% session activity).
+A progress tracking system for students using the Option C calculation approach
+(70% quiz performance + 30% session activity).
 
 ## What Was Implemented
 

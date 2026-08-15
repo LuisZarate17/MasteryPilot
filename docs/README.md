@@ -10,6 +10,12 @@ This folder contains the handoff documentation for the AI Tutor project.
 4. [User Manual](USER_MANUAL.md)
 5. [Known Limitations](KNOWN_LIMITATIONS.md)
 
+## Implementation Details
+
+Deeper notes on individual subsystems, for developers changing them:
+
+- [Progress Tracker](ImplementationDetails/PROGRESS_TRACKER_IMPLEMENTATION.md) — how the 70/30 completion percentage is calculated and cached.
+
 ## Audience Guide
 
 - Sponsors and technical reviewers should start with the handoff overview.
