@@ -4,7 +4,6 @@ from django.contrib.auth import get_user_model
 import uuid
 from django.conf import settings
 
-User = get_user_model()
 
 class Session(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -66,8 +65,6 @@ class QuizAnswer(models.Model):
     answers_json = models.JSONField()          # {"1":{"choiceId":"B"},"2":{"choiceIds":["A","D"]},...}
     graded_json = models.JSONField(null=True, blank=True)  # per-item isCorrect, correctAnswer, rationale
     submitted_at = models.DateTimeField(auto_now_add=True)
-
-from django.contrib.auth.models import User
 
 
 

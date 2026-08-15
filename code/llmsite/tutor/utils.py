@@ -31,17 +31,6 @@ def is_admin(user):
 
 # Quiz Grading
 
-def create_or_replace_active_quiz(session, quiz_obj):
-    Quiz.objects.filter(session=session, status="active").update(
-        status="submitted",
-        ended_at=timezone.now(),
-    )
-    return Quiz.objects.create(
-        session=session,
-        status="active",
-        quiz_json=quiz_obj,
-    )
-
 def parse_csv_answers(csv_string: str) -> list[str]:
     f = io.StringIO(csv_string or "")
     rows = list(csv.reader(f))
