@@ -129,6 +129,26 @@ family — set it to `Qwen/Qwen3-1.7B` for a smaller download than the default
 `Qwen/Qwen3-4B`. An unrecognised `LLM_MODULE` stops startup with an error
 naming the valid options.
 
+### Measuring the tutor
+
+The test suite runs without a GPU and mocks the model, which keeps it fast but
+means it cannot say anything about how the tutor actually behaves. Two commands
+cover what it cannot. Both need `requirements-llm.txt`.
+
+```
+python manage.py rag_eval      # retrieval: recall, MRR, off-topic rejection
+python manage.py tutor_eval    # tutoring: does it lose its place in a problem?
+```
+
+`rag_eval` scores retrieval against a labelled query set. `tutor_eval` runs
+scripted conversations — solving through, asking for clarification, answering
+wrong, changing topic — and reports how often the tutor rewinds to a question
+already answered or repeats its previous reply verbatim. Both write JSON so
+runs can be compared.
+
+The numbers in [Known Limitations](docs/KNOWN_LIMITATIONS.md) come from these,
+and sampling is noisy: use at least `--runs 3` before believing a difference.
+
 ## Configuration
 
 All secrets and environment-specific settings come from environment variables.
