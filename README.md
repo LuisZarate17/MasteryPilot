@@ -1,25 +1,117 @@
-## MasteryPilot
+# MasteryPilot
 
-> **Team capstone project** (WSU CPT_S 421/423). Built by [Zelefant](https://github.com/Zelefant),
-> [Jesse Boakye](https://github.com/jesseboakye), and [Luis Zarate](https://github.com/LuisZarate17).
-> This is Luis Zarate's fork of the team repository. Its history has been rewritten to strip
-> large binaries — a screen recording, textbook PDFs, and dev database snapshots — so commit
-> hashes here diverge from upstream.
-> Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
+**A self-hosted AI tutor for school districts.** Students work through their own
+curriculum one step at a time; teachers watch progress and read transcripts.
+Every model runs on the district's own hardware, so student conversations never
+leave the building.
 
-**Stack:** Python 3.13 · Django · SQLite · local LLM inference (Qwen3 / LLaMA / Mistral) · hybrid RAG retrieval (dense FAISS + BM25, fused on rank)
+[![tests](https://github.com/LuisZarate17/MasteryPilot/actions/workflows/tests.yml/badge.svg)](https://github.com/LuisZarate17/MasteryPilot/actions/workflows/tests.yml)
+![tests: 492](https://img.shields.io/badge/tests-492-brightgreen)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![Django](https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-## Project summary
+---
 
-A system for school districts to create individual AI tutors for their students, following their own curriculums and learning paths with teacher guidance.
+### The tutor asks rather than answers, and cites the curriculum it drew on
 
-### Additional information about the project
+![The tutor chat: a student solving 2x + 6 = 14 one step at a time](docs/images/tutor-chat.png)
 
-This AI tutoring system enables school districts to offer personalized learning experiences by providing students with an interactive AI tutor that adapts to their curriculum and skill level. The tutor delivers step-by-step guidance, practice exercises, and quizzes, while teachers can monitor progress, review transcripts, and see students flagged for intervention when their quiz average falls below a threshold. Inference runs locally against an open-weights model, so student conversations never leave the deployment. The system supports multiple subjects and student profiles.
+### Quizzes are generated, graded, and shown back with the correct answer
 
-It is a capstone prototype, not a product. Read [Known Problems](#known-problems) before putting it in front of students.
+![A graded three-question quiz showing correct answers, the student's answers, and per-question results](docs/images/graded-quiz.png)
 
-## Installation
+### Teachers see their own roster, transcripts and intervention flags
+
+![The teacher dashboard listing assigned students with chat history and progress actions](docs/images/teacher-dashboard.png)
+
+> The tutor replies and quiz questions above are real Qwen3-4B output, captured
+> 2026-08-14 on an RTX 5070 Ti. The grading is the app's own, produced by
+> answering that quiz through `/api/grade-quiz/`. Accounts and the roster are
+> demo data.
+
+## What it does
+
+- **Socratic tutoring.** The tutor gives one step per reply and waits, instead of
+  working the problem. It tracks which steps it has already taught and which
+  question it is waiting on, per session.
+- **Grounded in the district's own curriculum.** Teachers upload TXT, Markdown,
+  JSON, PDF or DOCX; retrieval pulls the relevant passage and the tutor names the
+  file it used.
+- **Quizzes end to end.** Generated on request, three questions, options shuffled
+  server-side, graded, and stored so a teacher can review them.
+- **Role-based dashboards** for students, teachers and admins, with per-student
+  progress and an intervention flag when a quiz average falls below threshold.
+- **Local inference.** Qwen3, Mistral or LLaMA, 4-bit, on your own GPU. No API
+  key, no third party, no per-token cost.
+
+## Architecture
+
+The interesting part is the middle: retrieval is genuinely hybrid, and the model
+is local.
+
+```mermaid
+flowchart TD
+    B["Student's browser<br/>chat.html"] --> D["Django<br/>tutor/views/chat.py"]
+
+    subgraph RET["Hybrid retrieval — code/llmsite/rag.py"]
+        direction TB
+        Q["question + recent turns"]
+        BM["BM25<br/>sparse / lexical"]
+        DN["FAISS + all-MiniLM-L6-v2<br/>dense / semantic"]
+        F["Reciprocal rank fusion"]
+        S["Relevance floor<br/>MIN_SCORE = 0.45"]
+        Q --> BM
+        Q --> DN
+        BM --> F
+        DN --> F
+        F --> S
+    end
+
+    D --> Q
+    S -->|"passages, or nothing"| L["languagemodel.py<br/>Qwen3 / Mistral / LLaMA<br/>4-bit, on your GPU"]
+    L --> A["One step back to the student,<br/>citing the file it used"]
+    A --> DB[("SQLite<br/>sessions · quizzes · progress")]
+```
+
+`MIN_SCORE` is the off-topic guard: when nothing clears the floor the tutor gets
+no passages rather than the least-bad ones, which is what stops "what is the
+capital of France?" from being answered out of an algebra textbook.
+
+## Built by
+
+A team capstone for **WSU CPT_S 421/423**, built by
+[Zelefant](https://github.com/Zelefant),
+[Jesse Boakye](https://github.com/jesseboakye) and
+[Luis Zarate](https://github.com/LuisZarate17).
+
+It is a prototype, not a product. Read [Known Problems](#known-problems) before
+putting it in front of students — the guardrails in particular do not hold.
+
+## Tested
+
+492 tests in under a second, **no GPU and no model download required** — the
+suite mocks the adapter and runs on the 3-package core install.
+
+```
+cd code/llmsite && python manage.py test
+```
+
+475 of them run there. The other 17 need real embeddings and a real FAISS index,
+so they skip with a message saying so and are covered by the separate
+`rag-verify` workflow, which installs the full stack on demand.
+
+[CI](.github/workflows/tests.yml) runs that on every push against
+`requirements.txt` alone, which is what keeps the install contract honest: any
+change that starts importing torch at module scope fails there. A second job
+installs from scratch with `setup.sh --serve`, boots Gunicorn and asserts the
+site answers, so the documented deploy path is exercised too.
+
+What the suite deliberately cannot tell you is how the tutor behaves — that
+needs real weights, and it is measured separately (see
+[Measuring the tutor](#measuring-the-tutor)).
+
+## Getting started
 
 ### Prerequisites
 
@@ -129,11 +221,11 @@ family — set it to `Qwen/Qwen3-1.7B` for a smaller download than the default
 `Qwen/Qwen3-4B`. An unrecognised `LLM_MODULE` stops startup with an error
 naming the valid options.
 
-### Measuring the tutor
+## Measuring the tutor
 
-The test suite runs without a GPU and mocks the model, which keeps it fast but
-means it cannot say anything about how the tutor actually behaves. Two commands
-cover what it cannot. Both need `requirements-llm.txt`.
+The test suite mocks the model, which keeps it fast but means it cannot say
+anything about how the tutor actually behaves. Two commands cover what it
+cannot. Both need `requirements-llm.txt`.
 
 ```
 python manage.py rag_eval      # retrieval: recall, MRR, off-topic rejection
@@ -148,6 +240,26 @@ runs can be compared.
 
 The numbers in [Known Limitations](docs/KNOWN_LIMITATIONS.md) come from these,
 and sampling is noisy: use at least `--runs 3` before believing a difference.
+
+### What retrieval actually scores
+
+Measured on 2026-08-14 against two OpenStax algebra textbooks uploaded through
+the dashboard — 3.3 million characters, **5,125 chunks**, real embeddings and a
+real FAISS index:
+
+- **25 of 25** in-corpus questions retrieved relevant material.
+- **25 of 25** off-topic questions were rejected with zero hits.
+- `MIN_SCORE` was recalibrated **0.25 → 0.45** as a result. At 0.25 a corpus
+  that size always has *something* clearing the floor, and only 3 of 6 off-topic
+  questions were rejected.
+
+There is also a 23-query, 6-document fixture in `tutor/tests/fixtures/eval/`
+that `rag_eval` and the dispatch-only `rag-verify` workflow run against. It is a
+fast regression check, not evidence about a real curriculum: it still passes at
+the new floor, but its worst in-corpus query clears the threshold by 0.012. An
+earlier version of this file quoted a separation figure from that small corpus
+as if it characterised the retriever. It did not. A small corpus is not
+reassurance.
 
 ## Configuration
 
@@ -174,7 +286,7 @@ python manage.py migrate tutor 0001
 python manage.py migrate tutor
 ```
 
-## Functionality
+## Using it
 
 1. Start the application by running the above commands.
 2. The AI tutor will introduce itself and display the initial instructions.
@@ -182,7 +294,6 @@ python manage.py migrate tutor
 4. The tutor will respond with one step at a time. After completing the step, ask it to continue or ask for clarification.
 5. Request quizzes by asking the tutor; it will provide them in a specially formatted quiz UI.
 6. The tutor refuses inappropriate and off-topic requests, and works through problems one step at a time. Neither holds under deliberate pressure — see [Known Problems](#known-problems) for what a student can get it to do.
-
 
 ## Known Problems
 
@@ -212,12 +323,13 @@ what was fixed.
 - **Only Qwen3-4B is exercised regularly.** Mistral and LLaMA load and generate
   correctly, but the licence-gated checkpoints named above have not been run —
   ungated mirrors of the same weights were used instead.
+- **Session titles are model-generated and unsanitised**, so a title produced by
+  injection text appears verbatim in the teacher's session list.
 - Responses are not streamed, so the student waits for the whole reply. About
   1.3 seconds per message on the reference GPU, or about double that on the
   turns where the server regenerates a reply.
 - SQLite and Django's development server are the defaults. Neither is sized for
   more than a classroom.
-
 
 ## Contributing
 
@@ -242,10 +354,11 @@ what was fixed.
 
 ## License
 
-[See License](LICENSE.txt)
+MIT — [see LICENSE.txt](LICENSE.txt).
 
+## About this fork
 
-
-
-
-
+This is Luis Zarate's fork of the team repository. Its history has been
+rewritten to strip large binaries — a screen recording, textbook PDFs, and dev
+database snapshots — so commit hashes here diverge from upstream.
+Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
