@@ -37,30 +37,30 @@ The client requested a system to bulk-generate student accounts using a CSV. As 
 
 Here are links to the issues that we completed in this sprint:
 
-- Account system https://github.com/Zelefant/CPTS421-AI-Tutor/issues/14
-- Program to make swapping models less technical https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21
-- Role-based access and rostering https://github.com/Zelefant/CPTS421-AI-Tutor/issues/3
-- Bulk-generate new student accounts with CSV https://github.com/Zelefant/CPTS421-AI-Tutor/issues/22
-- Classroom Monitoring https://github.com/Zelefant/CPTS421-AI-Tutor/issues/12
-- Web UI (updated with dashboards from last time) https://github.com/Zelefant/CPTS421-AI-Tutor/issues/1
+- Account system https://github.com/Zelefant/MasteryPilot/issues/14
+- Program to make swapping models less technical https://github.com/Zelefant/MasteryPilot/issues/21
+- Role-based access and rostering https://github.com/Zelefant/MasteryPilot/issues/3
+- Bulk-generate new student accounts with CSV https://github.com/Zelefant/MasteryPilot/issues/22
+- Classroom Monitoring https://github.com/Zelefant/MasteryPilot/issues/12
+- Web UI (updated with dashboards from last time) https://github.com/Zelefant/MasteryPilot/issues/1
 
 ## Incomplete Issues/User Stories
 
 Here are links to issues we worked on but did not complete in this sprint:
 
-- Teacher Intervention Alerts https://github.com/Zelefant/CPTS421-AI-Tutor/issues/2
-- Student-defined objectives and mastery criteria https://github.com/Zelefant/CPTS421-AI-Tutor/issues/11
-- Audit and diagnostics system https://github.com/Zelefant/CPTS421-AI-Tutor/issues/6
-- Privacy features/documentation https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7
-- Adaptive question difficulty (Stretch goal) https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8
-- Accessibility features (mostly already there but has not been a focus) https://github.com/Zelefant/CPTS421-AI-Tutor/issues/13
+- Teacher Intervention Alerts https://github.com/Zelefant/MasteryPilot/issues/2
+- Student-defined objectives and mastery criteria https://github.com/Zelefant/MasteryPilot/issues/11
+- Audit and diagnostics system https://github.com/Zelefant/MasteryPilot/issues/6
+- Privacy features/documentation https://github.com/Zelefant/MasteryPilot/issues/7
+- Adaptive question difficulty (Stretch goal) https://github.com/Zelefant/MasteryPilot/issues/8
+- Accessibility features (mostly already there but has not been a focus) https://github.com/Zelefant/MasteryPilot/issues/13
   
 ## Code Files for Review
 
 Please review the following code files, which were actively developed during this sprint, for quality:
 
 Main Program Python
-- [languagemodel.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel.py)
+- [languagemodel.py](https://github.com/Zelefant/MasteryPilot/blob/b97d576ac345a7ee8933cf6a8c063ee8779f708b/code/llmsite/languagemodel.py) (pinned: this file was later split into per-model modules on `master`)
 - [languagemodel_legacy.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel_legacy.py) (Primarily used for testing)
 - [views.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/views.py)
 - [llmsite/urls.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/llmsite/urls.py)

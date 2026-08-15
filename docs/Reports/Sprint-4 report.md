@@ -27,18 +27,18 @@ In addition, teachers now have access to the unintegrated features from last spr
 ## Completed Issues/User Stories
 
 Here are links to the issues that we completed in this sprint:  
-\* https://github.com/Zelefant/CPTS421-AI-Tutor/issues/6  
-\* https://github.com/Zelefant/CPTS421-AI-Tutor/issues/2  
-\* https://github.com/Zelefant/CPTS421-AI-Tutor/issues/11  
-\* https://github.com/Zelefant/CPTS421-AI-Tutor/issues/12
+\* https://github.com/Zelefant/MasteryPilot/issues/6  
+\* https://github.com/Zelefant/MasteryPilot/issues/2  
+\* https://github.com/Zelefant/MasteryPilot/issues/11  
+\* https://github.com/Zelefant/MasteryPilot/issues/12
 
 ## Incomplete Issues/User Stories
 
 Here are links to issues we worked on but did not complete in this sprint:
 
-\* [https://github.com/Zelefant/CPTS421-AI-Tutor/issues/5](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/5) \- Cannot test efficiently on local machines  
-\* [https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21) \- Will require more work than previously thought  
-\* [https://github.com/Zelefant/CPTS421-AI-Tutor/issues/15](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/15) \- Did not get to writing this sprint
+\* [https://github.com/Zelefant/MasteryPilot/issues/5](https://github.com/Zelefant/MasteryPilot/issues/5) \- Cannot test efficiently on local machines  
+\* [https://github.com/Zelefant/MasteryPilot/issues/21](https://github.com/Zelefant/MasteryPilot/issues/21) \- Will require more work than previously thought  
+\* [https://github.com/Zelefant/MasteryPilot/issues/15](https://github.com/Zelefant/MasteryPilot/issues/15) \- Did not get to writing this sprint
 
 ## Code Files for Review
 

@@ -25,44 +25,44 @@ We began our research into using LLMs for tutoring purposes. We did experimentat
 Here are links to the issues that we completed in this sprint:
 
 - #9: Quiz System with JSON – Fully implemented JSON-based quiz generation and grading.
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/9
+      https://github.com/Zelefant/MasteryPilot/issues/9
 - #2: Web UI – Base HTML and server integration started and functional in prototype.
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/2
+      https://github.com/Zelefant/MasteryPilot/issues/2
 - #7: Privacy Features and Documentation – Prompt safeguards added to prevent inappropriate content and ensure user data protection.
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7
+      https://github.com/Zelefant/MasteryPilot/issues/7
 - #15: Documentation for Local Server Set-up – Installation and .env setup instructions written and tested.
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/15
+      https://github.com/Zelefant/MasteryPilot/issues/15
 
 ## Incomplete Issues/User Stories
 
 Here are links to issues we worked on but did not complete in this sprint:
 
 - #3: Role-based Access and Rostering
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/3 - <<Database schema design started, authentication not implemented.>>
+      https://github.com/Zelefant/MasteryPilot/issues/3 - <<Database schema design started, authentication not implemented.>>
 - #5: Local Language Model
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/5 - <<Researching, still testing local deployment options>>
+      https://github.com/Zelefant/MasteryPilot/issues/5 - <<Researching, still testing local deployment options>>
 - #6: Audit and Diagnostics System
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/6 - <<Logging planned but not connected yet.>>
+      https://github.com/Zelefant/MasteryPilot/issues/6 - <<Logging planned but not connected yet.>>
 - #10: Content and PDF Ingestion with RAG
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/10 - <<Research ongoing.>>
+      https://github.com/Zelefant/MasteryPilot/issues/10 - <<Research ongoing.>>
 - #11: Student-defined Objectives and Mastery Criteria
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/11 - <<Outline drafted, not implemented.>>
+      https://github.com/Zelefant/MasteryPilot/issues/11 - <<Outline drafted, not implemented.>>
 - #12: Classroom Monitoring
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/12 - <<Backend integration pending.>>
+      https://github.com/Zelefant/MasteryPilot/issues/12 - <<Backend integration pending.>>
 - #13: Accessibility Features (WCAG 2.2 AA)
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/13 - <<Front-end testing not done.>>
+      https://github.com/Zelefant/MasteryPilot/issues/13 - <<Front-end testing not done.>>
 - #14: Account System with OAuth
-      https://github.com/Zelefant/CPTS421-AI-Tutor/issues/14 - <<OAuth flow still in development.>>
+      https://github.com/Zelefant/MasteryPilot/issues/14 - <<OAuth flow still in development.>>
   
 ## Code Files for Review
 
 Please review the following code files, which were actively developed during this sprint, for quality:
 
-- [languagemodel.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/languagemodel.py)
+- [languagemodel.py](https://github.com/Zelefant/MasteryPilot/blob/console_prototype/llmsite/languagemodel.py)
 - [views.py](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/views.py)
 - [chat.html](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/master/code/llmsite/tutor/templates/chat.html)
 - [README.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/README.md)
-- [SPRINT-1-REPORT.md](https://github.com/Zelefant/CPTS421-AI-Tutor/blob/console_prototype/SPRINT-1-REPORT.md)
+- [SPRINT-1-REPORT.md](https://github.com/Zelefant/MasteryPilot/blob/console_prototype/docs/SPRINT-1-REPORT.md)
 
 ## Retrospective Summary
 

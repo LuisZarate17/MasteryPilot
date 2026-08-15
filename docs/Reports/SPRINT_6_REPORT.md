@@ -16,14 +16,14 @@ The model swapper, a previously planned feature, was not updated from last semes
 
 ## Completed Issues/User Stories
 Here are links to the issues that we completed in this sprint:
-* [#7 - Privacy Features and Documentation](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7)
-* [#22 - Bulk Generate Student Accounts with CSV](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/22)
+* [#7 - Privacy Features and Documentation](https://github.com/Zelefant/MasteryPilot/issues/7)
+* [#22 - Bulk Generate Student Accounts with CSV](https://github.com/Zelefant/MasteryPilot/issues/22)
 
 ## Incomplete Issues/User Stories
 Here are links to issues we worked on but did not complete in this sprint:
-* [#21 - Program to make swapping models less technical](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/21)
+* [#21 - Program to make swapping models less technical](https://github.com/Zelefant/MasteryPilot/issues/21)
 The aforementioned model swapper was not updated to work with the LLM module system we created during the second semester.
-* [#8 - Adaptive question difficulty](https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8)
+* [#8 - Adaptive question difficulty](https://github.com/Zelefant/MasteryPilot/issues/8)
 Scrapped stretch goal we never were able to reach.
 
 ## Code Files for Review

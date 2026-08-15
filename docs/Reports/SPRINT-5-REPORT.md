@@ -30,8 +30,8 @@ Here are links to the issues that we completed in this sprint:
 ## Incomplete Issues/User Stories
 
 Here are links to issues we worked on but did not complete in this sprint:
-- Privacy features/documentation https://github.com/Zelefant/CPTS421-AI-Tutor/issues/7
-- Adaptive question difficulty (Stretch goal) https://github.com/Zelefant/CPTS421-AI-Tutor/issues/8
+- Privacy features/documentation https://github.com/Zelefant/MasteryPilot/issues/7
+- Adaptive question difficulty (Stretch goal) https://github.com/Zelefant/MasteryPilot/issues/8
   
 ## Code Files for Review
 
