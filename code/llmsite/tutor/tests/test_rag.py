@@ -60,39 +60,36 @@ class ThinExtractionTests(RagTestCase):
         self.assertEqual(rag.extracted_length([("  ab  \n", "", "")]), 2)
 
     def test_an_empty_file_is_reported_as_nothing_extracted(self):
-        with mock.patch("builtins.print") as printed:
+        with self.assertLogs("rag", level="WARNING") as logged:
             total = rag.report_thin_extraction("scan.pdf", self.pieces(""))
 
         self.assertEqual(total, 0)
-        message = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        message = " ".join(logged.output)
         self.assertIn("scan.pdf", message)
         self.assertIn("no text extracted", message)
 
     def test_a_scanned_pdf_is_reported_with_its_character_count(self):
         """174 characters over two pages is the calibration case."""
-        with mock.patch("builtins.print") as printed:
+        with self.assertLogs("rag", level="WARNING") as logged:
             total = rag.report_thin_extraction("scan.pdf", self.pieces("x" * 174))
 
         self.assertEqual(total, 174)
-        message = " ".join(str(c.args[0]) for c in printed.call_args_list)
+        message = " ".join(logged.output)
         self.assertIn("174", message)
         self.assertIn("OCR", message)
 
     def test_a_real_document_is_not_reported(self):
-        with mock.patch("builtins.print") as printed:
+        with self.assertNoLogs("rag", level="WARNING"):
             total = rag.report_thin_extraction("lesson.txt", self.pieces("x" * 900))
 
         self.assertEqual(total, 900)
-        self.assertEqual(printed.call_args_list, [])
 
     def test_the_floor_is_exclusive(self):
         """Exactly at the floor counts as enough, so the boundary is pinned."""
-        with mock.patch("builtins.print") as printed:
+        with self.assertNoLogs("rag", level="WARNING"):
             rag.report_thin_extraction(
                 "edge.txt", self.pieces("x" * rag.THIN_EXTRACTION_CHARS)
             )
-
-        self.assertEqual(printed.call_args_list, [])
 
     def test_loading_a_thin_file_warns_and_still_indexes_what_it_found(self):
         """The warning is a warning, not a refusal — 174 characters still index."""
@@ -100,12 +97,11 @@ class ThinExtractionTests(RagTestCase):
             with open(os.path.join(tmp, "scan.txt"), "w", encoding="utf-8") as handle:
                 handle.write("Page 1 header")
 
-            with mock.patch("builtins.print") as printed:
+            with self.assertLogs("rag", level="WARNING") as logged:
                 rag.default_index.add_documents = lambda chunks: None
                 rag.default_index.load_files(tmp)
 
-            message = " ".join(str(c.args[0]) for c in printed.call_args_list)
-            self.assertIn("scan.txt", message)
+            self.assertIn("scan.txt", " ".join(logged.output))
 
 
 class ChunkTextTests(RagTestCase):

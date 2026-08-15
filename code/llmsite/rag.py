@@ -27,9 +27,12 @@ no particular index: ``chunk_text``, ``_rel_source``, ``build_rag_system_message
 """
 
 import json
+import logging
 import math
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 # Bumped when the sidecar's shape changes. An unrecognised version is treated
 # as unusable, which means "rebuild", not "crash".
@@ -437,12 +440,13 @@ def report_thin_extraction(filepath, pieces, floor=THIN_EXTRACTION_CHARS):
     total = extracted_length(pieces)
     name = os.path.basename(filepath)
     if total == 0:
-        print(f"[RAG] {name}: no text extracted - nothing from this file is searchable.")
+        logger.warning("%s: no text extracted - nothing from this file is searchable", name)
     elif total < floor:
-        print(
-            f"[RAG] {name}: only {total} characters extracted, below {floor}. "
-            f"If this is a scanned or image-only document, its contents are not "
-            f"searchable - there is no OCR step."
+        logger.warning(
+            "%s: only %s characters extracted, below %s. If this is a scanned "
+            "or image-only document, its contents are not searchable - there "
+            "is no OCR step.",
+            name, total, floor,
         )
     return total
 
@@ -771,7 +775,7 @@ class RagIndex:
         if self.index is not None:
             faiss.write_index(self.index, self.index_path)
         self._write_sidecar(payload)
-        print(f"[RAG] Index saved: {payload['ntotal']} vectors -> {self.index_path}")
+        logger.info("Index saved: %s vectors -> %s", payload["ntotal"], self.index_path)
 
     def load_index(self):
         """Load FAISS index and document metadata from disk.
@@ -798,7 +802,7 @@ class RagIndex:
             self.index = None
             self.documents = []
             self._bm25 = None
-            print("[RAG] Index loaded from disk: empty corpus")
+            logger.info("Index loaded from disk: empty corpus")
             return
 
         try:
@@ -821,7 +825,7 @@ class RagIndex:
         # Taken from the file, so reopening an index never has to load a model
         # just to learn how wide its vectors are.
         self.dimension = payload.get("dimension") or index.d
-        print(f"[RAG] Index loaded from disk: {index.ntotal} vectors")
+        logger.info("Index loaded from disk: %s vectors", index.ntotal)
 
     # ── Corpus fingerprinting ────────────────────────────────────────────────
 
@@ -900,7 +904,7 @@ class RagIndex:
         n = index.ntotal
         if n < IVF_THRESHOLD or isinstance(index, faiss.IndexIVFFlat):
             return
-        print(f"[RAG] {n} vectors - upgrading to approximate IVF index...")
+        logger.info("%s vectors - upgrading to approximate IVF index", n)
         all_vecs = index.reconstruct_n(0, n)
         nlist = min(100, n // 10)
         width = self.get_dimension()
@@ -910,7 +914,7 @@ class RagIndex:
         ivf.add(all_vecs)
         ivf.nprobe = 10
         self.index = ivf
-        print(f"[RAG] IVF index ready (nlist={nlist}, nprobe=10).")
+        logger.info("IVF index ready (nlist=%s, nprobe=10)", nlist)
 
     def ensure_curriculum_loaded(self, curriculum_path=None):
         """Make this index reflect the corpus on disk, right now.
@@ -930,7 +934,7 @@ class RagIndex:
         self.curriculum_path = curriculum_path
 
         if not curriculum_path or not os.path.exists(curriculum_path):
-            print("[RAG] No curriculum folder found. Skipping.")
+            logger.info("No curriculum folder found; skipping")
             return
 
         current = self.scan_manifest(curriculum_path)
@@ -945,9 +949,9 @@ class RagIndex:
                 self._loaded_manifest = current
                 return
             except IndexUnusable as exc:
-                print(f"[RAG] Cached index rejected ({exc}) - rebuilding.")
+                logger.warning("Cached index rejected (%s) - rebuilding", exc)
 
-        print(f"[RAG] Curriculum changed or unindexed - rebuilding from {curriculum_path} ...")
+        logger.info("Curriculum changed or unindexed - rebuilding from %s", curriculum_path)
         self._rebuild(curriculum_path, current)
 
     def invalidate(self):
@@ -986,7 +990,7 @@ class RagIndex:
         self._maybe_upgrade_to_ivf()
         self.save_index(manifest)
         self._loaded_manifest = manifest
-        print(f"[RAG] Curriculum indexed: {len(self.documents)} chunks.")
+        logger.info("Curriculum indexed: %s chunks", len(self.documents))
 
     # ── Retrieval ────────────────────────────────────────────────────────────
 
@@ -1100,7 +1104,7 @@ class RagIndex:
             try:
                 pieces = extract(filepath)
             except Exception as exc:
-                print(f"[RAG] Skipping {filepath}: {type(exc).__name__}: {exc}")
+                logger.warning("Skipping %s: %s: %s", filepath, type(exc).__name__, exc)
                 continue
 
             label = _rel_source(filepath, root)

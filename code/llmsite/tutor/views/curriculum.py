@@ -11,12 +11,15 @@ from django.utils.text import get_valid_filename
 from django.views.decorators.http import require_GET, require_http_methods
 import csv
 import json
+import logging
 import os
 import re
 
 from ..models import Chat as DBChat, Session, StudentProfile, TeacherProfile
 from ..utils import is_admin, is_teacher_or_admin
 from .chat import _is_bootstrap_user_message
+
+logger = logging.getLogger(__name__)
 
 
 # Extension -> content types a browser might plausibly send for it.
@@ -71,7 +74,7 @@ def _invalidate_rag_index():
         rag.invalidate()
     except Exception as exc:  # pragma: no cover - never block the upload
         # The RAG stack is optional; the dashboard must work without it.
-        print(f"[curriculum] could not invalidate the RAG index: {exc}")
+        logger.warning("Could not invalidate the RAG index: %s", exc)
 
 
 @login_required

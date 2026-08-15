@@ -194,6 +194,45 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# Logging
+#
+# The application used print() throughout, which meant no levels, no
+# timestamps, no way to quieten it in production, and - because print writes to
+# whatever encoding the console happens to use - a crash on Windows when a log
+# line contained a character cp1252 could not encode. Handlers do not raise
+# that way.
+#
+# Three loggers because the code splits three ways: the Django app, retrieval,
+# and the model adapters. rag and languagemodel are importable without Django,
+# so they call logging.getLogger(__name__) and get sensible defaults from the
+# root logger when used outside a Django process.
+#
+# DJANGO_LOG_LEVEL raises or lowers all three at once. INFO is the default
+# because most of what these log is operational and worth seeing: which model
+# is loading, how many chunks were indexed, when a reply was regenerated.
+LOG_LEVEL = os.getenv("DJANGO_LOG_LEVEL", "INFO").upper()
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "{levelname} {asctime} {name} {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "loggers": {
+        name: {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False}
+        for name in ("tutor", "rag", "languagemodel")
+    },
+}
+
 # Site configuration
 SITE_ID = 1
 

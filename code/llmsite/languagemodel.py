@@ -12,8 +12,11 @@ pure helpers below be unit-tested without a model.
 """
 
 from dataclasses import dataclass
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 # The curriculum directory is settings.CURRICULUM_ROOT, read lazily in
 # load_curriculum. It used to be a module constant pointing one level deeper
@@ -467,8 +470,9 @@ class Adapter:
         model_id = os.getenv("LANGUAGE_MODEL_ID") or self.spec.default_model_id
 
         cfg = AutoConfig.from_pretrained(model_id)
-        print(f"Loading model: {model_id} ({self.spec.name})")
-        print("cfg.max_position_embeddings:", getattr(cfg, "max_position_embeddings", None))
+        logger.info("Loading model %s (%s), max_position_embeddings=%s",
+                    model_id, self.spec.name,
+                    getattr(cfg, "max_position_embeddings", None))
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
 
@@ -488,15 +492,23 @@ class Adapter:
             device_map="auto",
         )
 
-        print("Running Torch " + torch.__version__)
-        print("Torch CUDA version: " + str(torch.version.cuda))
-        print("torch.cuda.is_available() =", torch.cuda.is_available())
+        # One line rather than eight. These are the facts that explain a bad
+        # load after the event - a CPU offload, the wrong CUDA build, a card
+        # too small - so they are worth keeping, but not worth eight lines of
+        # console every time a session opens.
         if torch.cuda.is_available():
-            print("cuda device count =", torch.cuda.device_count())
-            print("cuda device 0 =", torch.cuda.get_device_name(0))
-            print("total VRAM bytes =", torch.cuda.get_device_properties(0).total_memory)
-
-        print("hf_device_map =", getattr(model, "hf_device_map", None))
+            logger.info(
+                "torch %s (CUDA %s), %s device(s), device 0 = %s, %.1f GB VRAM",
+                torch.__version__, torch.version.cuda, torch.cuda.device_count(),
+                torch.cuda.get_device_name(0),
+                torch.cuda.get_device_properties(0).total_memory / 1e9,
+            )
+        else:
+            logger.warning(
+                "torch %s reports no CUDA device - generation will run on CPU "
+                "and be very slow", torch.__version__,
+            )
+        logger.info("device map: %s", getattr(model, "hf_device_map", None))
 
         model.eval()
         return model, tokenizer
@@ -507,7 +519,7 @@ class Adapter:
         from rag import ensure_curriculum_loaded
 
         curriculum_path = str(settings.CURRICULUM_ROOT)
-        print(f"Loading curriculum from {curriculum_path}...")
+        logger.info("Loading curriculum from %s", curriculum_path)
         ensure_curriculum_loaded(curriculum_path)
 
     def _apply_template(self, tokenizer, messages) -> str:
@@ -564,7 +576,7 @@ class Adapter:
 
     def start_chat(self, model, tokenizer, student_name, student_school, student_grade, student_classes):
         """Open a session. Returns (assistant_text, messages)."""
-        print("Chat has started")
+        logger.info("Chat started")
 
         self.load_curriculum()
 
@@ -578,11 +590,11 @@ class Adapter:
             },
         ]
 
-        print("Generating initial response")
+        logger.debug("Generating opening turn")
         assistant_text = self._generate(model, tokenizer, messages)
 
         messages.append({"role": "assistant", "content": assistant_text})
-        print("Response sent")
+        logger.debug("Response ready")
         return assistant_text, messages
 
     def send_message(self, model, tokenizer, messages, new_message, ledger=None,
@@ -596,7 +608,7 @@ class Adapter:
         """
         from rag import build_rag_system_message, build_retrieval_query, retrieve
 
-        print("New message sent:", new_message)
+        logger.debug("Student message received (%s chars)", len(new_message or ""))
 
         # Read the history before appending, so the current message is not also
         # counted as context for itself.
@@ -606,7 +618,7 @@ class Adapter:
         # added only to the copy handed to the model.
         messages.append({"role": "user", "content": new_message})
 
-        print("Getting curriculum context from RAG")
+        logger.debug("Retrieving curriculum context")
         context_text = build_rag_system_message(retrieve(query))
 
         # The context is folded into the student's turn rather than appended as
@@ -638,11 +650,11 @@ class Adapter:
                 "content": f"{preamble}\n\n{new_message}",
             }
 
-        print("Generating response")
+        logger.debug("Generating reply")
         assistant_text = self._generate(model, tokenizer, messages_for_generation)
 
         messages.append({"role": "assistant", "content": assistant_text})
-        print("Response sent")
+        logger.debug("Response ready")
         return assistant_text, messages
 
     def derive_session_title(self, model, tokenizer, first_message: str) -> str:
@@ -664,7 +676,7 @@ class Adapter:
                 model, tokenizer, messages, max_new_tokens=16, temperature=0.3
             )
         except Exception as e:
-            print(f"[derive_session_title] error: {e}")
+            logger.warning("Could not derive a session title: %s", e)
             return ""
         return clean_title(raw)
 

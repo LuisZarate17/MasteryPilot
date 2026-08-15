@@ -7,12 +7,15 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 import json
+import logging
 import random
 import re
 
 from ..models import Chat as DBChat, Quiz, QuizAnswer, Session
 from ..models import StudentProfile, TeacherProfile
 from ..utils import calculate_student_progress, is_admin, is_teacher_or_admin, parse_csv_answers
+
+logger = logging.getLogger(__name__)
 
 
 model = None
@@ -35,8 +38,8 @@ def _adapter():
 def _derive_session_title(first_message: str) -> str:
     try:
         return _adapter().derive_session_title(model, tokenizer, first_message)
-    except Exception as e:
-        print(f"[_derive_session_title] error: {e}")
+    except Exception:
+        logger.exception("Could not derive a session title")
         return ""
 
 
@@ -50,8 +53,8 @@ def ensure_llm_initialized():
     if model is None or tokenizer is None:
         try:
             model, tokenizer = _adapter().init_model()
-        except Exception as e:
-            print(f"[ensure_llm_initialized] Failed to init local model: {e}")
+        except Exception:
+            logger.exception("Failed to initialise the local model")
             model = tokenizer = None
 
 
@@ -333,8 +336,8 @@ def api_new_session(request):
             assistant_msg, messages = _adapter().start_chat(
                 model, tokenizer, name, school, grade, classes
             )
-        except Exception as e:
-            print(f"[api_new_session] start_chat error: {e}")
+        except Exception:
+            logger.exception("start_chat failed")
             messages = []
             assistant_msg = "Model error. Please try again later."
 
@@ -348,8 +351,8 @@ def api_new_session(request):
     # Return assistant_msg (whether real or generic fallback)
     try:
         calculate_student_progress(request.user)
-    except Exception as e:
-        print(f"Progress calculation error: {e}")
+    except Exception:
+        logger.exception("Progress calculation failed")
 
     return JsonResponse({
         "ok": True,
@@ -389,7 +392,7 @@ def api_chat(request):
         if active_session:
             ledger = active_session.progress_ledger or []
             if ledger and _looks_like_topic_change(msg):
-                print("[api_chat] student changed problem - clearing the ledger")
+                logger.info("Student changed problem - clearing the progress ledger")
                 ledger = []
                 active_session.progress_ledger = []
                 active_session.save(update_fields=["progress_ledger"])
@@ -435,7 +438,7 @@ def api_chat(request):
             # two retries would fight each other.
             if not _looks_like_quiz_request(msg) and _is_stalled(
                     assistant_reply_text, previous):
-                print("[api_chat] reply repeated the previous one - retrying once")
+                logger.info("Reply repeated the previous one - regenerating once")
                 nudged, _ = _adapter().send_message(
                     model, tokenizer, list(history), f"{msg}\n\n{STALL_NUDGE}",
                     ledger=ledger, waiting_on=waiting_on,
@@ -443,7 +446,7 @@ def api_chat(request):
                 if nudged and not _is_stalled(nudged, previous):
                     assistant_reply_text = nudged
                 else:
-                    print("[api_chat] retry repeated it too - sending as is")
+                    logger.warning("Regenerated reply repeated it too - sending as is")
 
             # A quiz that does not parse fails silently: no Quiz row is written,
             # the client renders it as an ordinary chat bubble, and the student
@@ -452,17 +455,17 @@ def api_chat(request):
             # only, and nothing at all on the 13 that already worked.
             if (_looks_like_quiz_request(msg)
                     and _try_extract_quiz_json(assistant_reply_text) is None):
-                print("[api_chat] quiz request did not produce JSON - retrying once")
+                logger.info("Quiz request did not produce JSON - regenerating once")
                 retry_text, _ = _adapter().send_message(
                     model, tokenizer, list(history), msg, ledger=ledger
                 )
                 if _try_extract_quiz_json(retry_text) is not None:
                     assistant_reply_text = retry_text
                 else:
-                    print("[api_chat] retry did not produce JSON either - "
-                          "sending the prose reply")
-        except Exception as e:
-            print(f"[api_chat] send_message error: {e}")
+                    logger.warning("Regenerated quiz did not produce JSON either "
+                                   "- sending the prose reply")
+        except Exception:
+            logger.exception("send_message failed")
             assistant_reply_text = "Model error, please try again later."
             error_occurred = True
 
@@ -484,8 +487,8 @@ def api_chat(request):
             if session.title in ("", "New session") and not _has_student_message(session):
                 try:
                     derived = _derive_session_title(msg)
-                except Exception as e:
-                    print(f"[api_chat] derive_session_title error: {e}")
+                except Exception:
+                    logger.exception("Auto-titling failed")
                     derived = ""
                 if derived:
                     session.title = derived
@@ -503,8 +506,8 @@ def api_chat(request):
                     canonical = _maybe_persist_quiz(session, assistant_reply_text)
                     if canonical:
                         assistant_reply_text = canonical
-                except Exception as qe:
-                    print(f"[api_chat] Quiz persistence error: {qe}")
+                except Exception:
+                    logger.exception("Quiz persistence failed")
                 DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
 
                 # Record the step just taught, unless the reply was a quiz —
@@ -518,14 +521,14 @@ def api_chat(request):
                             session.progress_ledger, assistant_reply_text
                         )
                         session.save(update_fields=["progress_ledger"])
-                    except Exception as le:
-                        print(f"[api_chat] Ledger update error: {le}")
+                    except Exception:
+                        logger.exception("Ledger update failed")
 
             user_message_count = DBChat.objects.filter(session=session, role="user").count()
             if user_message_count % 5 == 0:
                 calculate_student_progress(request.user)
-    except Exception as e:
-        print(f"Chat persistence or progress calc error: {e}")
+    except Exception:
+        logger.exception("Chat persistence or progress calculation failed")
 
     payload = {"ok": True, "model_text": assistant_reply_text}
     if new_session_title:
@@ -877,8 +880,8 @@ def api_grade_quiz(request):
     # this attempt immediately. A recompute failure must not fail grading.
     try:
         calculate_student_progress(request.user)
-    except Exception as pe:
-        print(f"[api_grade_quiz] Progress recompute error: {pe}")
+    except Exception:
+        logger.exception("Progress recompute after grading failed")
 
     # Return structured JSON (frontend will parse and display it)
     feedback_json = json.dumps(graded_feedback)
