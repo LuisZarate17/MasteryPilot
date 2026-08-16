@@ -211,15 +211,15 @@ quiz request comes back unparseable or the tutor repeats itself.
 
 ### Model add-ons
 
-- Qwen3 — default module
-- LLaMA — requires a license from Meta
-- Mistral
+| `LLM_MODULE` | Default checkpoint | Note |
+| --- | --- | --- |
+| `qwen` | `Qwen/Qwen3-4B` | The default, and the only one exercised regularly |
+| `mistral` | `mistralai/Mistral-7B-Instruct-v0.3` | Licence-gated on Hugging Face |
+| `llama` | `meta-llama/Llama-3.2-1B-Instruct` | Requires a licence from Meta |
 
-Pick one with `LLM_MODULE` in `.env` (`qwen`, `mistral`, or `llama`; defaults
-to `qwen`). `LANGUAGE_MODEL_ID` overrides the specific checkpoint within a
-family — set it to `Qwen/Qwen3-1.7B` for a smaller download than the default
-`Qwen/Qwen3-4B`. An unrecognised `LLM_MODULE` stops startup with an error
-naming the valid options.
+Set `LLM_MODULE` in `.env`; an unrecognised value stops startup with an error
+naming the valid options. `LANGUAGE_MODEL_ID` overrides the checkpoint within a
+family — set it to `Qwen/Qwen3-1.7B` for a smaller download than the default.
 
 ## Measuring the tutor
 
@@ -288,7 +288,7 @@ python manage.py migrate tutor
 
 ## Using it
 
-1. Start the application by running the above commands.
+1. Start the application by following [Getting started](#getting-started).
 2. The AI tutor will introduce itself and display the initial instructions.
 3. Enter a message describing the topic or problem you want help with.
 4. The tutor will respond with one step at a time. After completing the step, ask it to continue or ask for clarification.
@@ -321,7 +321,8 @@ what was fixed.
   student answering incorrectly and the tutor re-asking its question rather
   than correcting the mistake.
 - **Only Qwen3-4B is exercised regularly.** Mistral and LLaMA load and generate
-  correctly, but the licence-gated checkpoints named above have not been run —
+  correctly, but `mistralai/Mistral-7B-Instruct-v0.3` and
+  `meta-llama/Llama-3.2-1B-Instruct` are licence-gated and have never been run —
   ungated mirrors of the same weights were used instead.
 - **Session titles are model-generated and unsanitised**, so a title produced by
   injection text appears verbatim in the teacher's session list.
