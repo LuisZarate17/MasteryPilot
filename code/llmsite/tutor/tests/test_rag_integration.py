@@ -25,11 +25,29 @@ from django.test import SimpleTestCase
 import rag
 from tutor.management.commands._rag_harness import (
     EVAL_CORPUS,
+    FIXTURE_MIN_SCORE,
     _shared_embedder,
     isolated_index,
+    load_query_set,
 )
 
 from .base import HAS_RAG_STACK, SKIP_REASON
+
+
+def _retrieve(index, query, **kwargs):
+    """Retrieve at the floor this corpus is calibrated for.
+
+    rag.MIN_SCORE is 0.45, measured on 5,125 chunks of OpenStax. This fixture
+    is six short documents and its in-corpus scores bottom out at 0.30, so the
+    production floor rejects 6 of the 20 answerable queries here — not because
+    retrieval regressed, but because the two corpora produce different score
+    distributions. See FIXTURE_MIN_SCORE for both bands.
+
+    Passing it explicitly at every call site rather than patching rag.MIN_SCORE
+    keeps the production constant untouched and visible.
+    """
+    kwargs.setdefault("min_score", FIXTURE_MIN_SCORE)
+    return index.retrieve(query, **kwargs)
 
 
 @unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)
@@ -43,7 +61,7 @@ class RealIndexTests(SimpleTestCase):
 
     def test_a_direct_question_retrieves_its_own_document(self):
         with isolated_index(EVAL_CORPUS) as index:
-            hits = index.retrieve("how do plants convert sunlight into food")
+            hits = _retrieve(index, "how do plants convert sunlight into food")
 
             self.assertTrue(hits, "a clearly answerable question returned nothing")
             self.assertIn("photosynthesis.txt", {h["source"] for h in hits})
@@ -58,7 +76,7 @@ class RealIndexTests(SimpleTestCase):
         with isolated_index(EVAL_CORPUS) as index:
             for query, expected in cases:
                 with self.subTest(query=query):
-                    hits = index.retrieve(query)
+                    hits = _retrieve(index, query)
 
                     self.assertTrue(hits, f"{query!r} returned nothing")
                     self.assertEqual(
@@ -89,7 +107,7 @@ class PersistenceRoundTripTests(SimpleTestCase):
 
     def test_a_saved_index_reloads_with_identical_results(self):
         with isolated_index(EVAL_CORPUS) as index:
-            before = index.retrieve(self.QUERY)
+            before = _retrieve(index, self.QUERY)
             self.assertTrue(before, "nothing to compare — the query returned no hits")
 
             index.save_index()
@@ -97,7 +115,7 @@ class PersistenceRoundTripTests(SimpleTestCase):
             index.index = None
             index.load_index()
 
-            after = index.retrieve(self.QUERY)
+            after = _retrieve(index, self.QUERY)
 
         self.assertEqual(
             [(h["source"], h["chunk_idx"]) for h in before],
@@ -156,14 +174,14 @@ class EvictionTests(SimpleTestCase):
         index = self.build()
         self.assertIn(
             self.DOOMED,
-            {h["source"] for h in index.retrieve(self.QUERY)},
+            {h["source"] for h in _retrieve(index, self.QUERY)},
             "the document was not retrievable to begin with — the test proves nothing",
         )
 
         os.remove(os.path.join(self.corpus, self.DOOMED))
         index.ensure_curriculum_loaded(self.corpus)
 
-        self.assertNotIn(self.DOOMED, {h["source"] for h in index.retrieve(self.QUERY)})
+        self.assertNotIn(self.DOOMED, {h["source"] for h in _retrieve(index, self.QUERY)})
         self.assertNotIn(self.DOOMED, self.sources(index))
 
     def test_a_deletion_survives_a_restart(self):
@@ -184,7 +202,7 @@ class EvictionTests(SimpleTestCase):
         self.assertEqual(
             self.sources(index), set(os.listdir(self.corpus)) - {self.DOOMED}
         )
-        self.assertTrue(index.retrieve("what is the discriminant"))
+        self.assertTrue(_retrieve(index, "what is the discriminant"))
 
     def test_an_added_document_becomes_retrievable(self):
         index = self.build()
@@ -198,7 +216,7 @@ class EvictionTests(SimpleTestCase):
 
         self.assertIn("tides.txt", self.sources(index))
         self.assertIn(
-            "tides.txt", {h["source"] for h in index.retrieve("what causes the tides")}
+            "tides.txt", {h["source"] for h in _retrieve(index, "what causes the tides")}
         )
 
     def test_an_unchanged_corpus_is_not_rebuilt(self):
@@ -234,7 +252,7 @@ class HybridRetrievalTests(SimpleTestCase):
         with isolated_index(EVAL_CORPUS) as index:
             for query, expected in self.LEXICAL:
                 with self.subTest(query=query):
-                    hits = index.retrieve(query)
+                    hits = _retrieve(index, query)
 
                     self.assertTrue(hits, f"{query!r} returned nothing")
                     self.assertIn(expected, {h["source"].split("/")[0] for h in hits})
@@ -249,7 +267,7 @@ class HybridRetrievalTests(SimpleTestCase):
         with isolated_index(EVAL_CORPUS) as index:
             for query, expected in cases:
                 with self.subTest(query=query):
-                    hits = index.retrieve(query)
+                    hits = _retrieve(index, query)
 
                     self.assertTrue(hits, f"{query!r} returned nothing")
                     self.assertIn(expected, {h["source"].split("/")[0] for h in hits})
@@ -259,20 +277,81 @@ class HybridRetrievalTests(SimpleTestCase):
         with isolated_index(EVAL_CORPUS) as index:
             for query in ("what is the capital of France", "how do I reset my password"):
                 with self.subTest(query=query):
-                    self.assertEqual(index.retrieve(query), [])
+                    self.assertEqual(_retrieve(index, query), [])
 
     def test_code_inside_fenced_blocks_is_retrievable(self):
         """It was deleted during ingestion, so these could never have matched."""
         with isolated_index(EVAL_CORPUS) as index:
-            hits = index.retrieve("how do I use range to loop from 1 to 10")
+            hits = _retrieve(index, "how do I use range to loop from 1 to 10")
 
             self.assertIn("python_loops.md", {h["source"].split("/")[0] for h in hits})
 
     def test_every_hit_carries_a_fused_score(self):
         with isolated_index(EVAL_CORPUS) as index:
-            hits = index.retrieve("what is the discriminant")
+            hits = _retrieve(index, "what is the discriminant")
 
             self.assertTrue(all("score" in hit for hit in hits))
             self.assertEqual(
                 [h["score"] for h in hits], sorted((h["score"] for h in hits), reverse=True)
             )
+
+
+@unittest.skipUnless(HAS_RAG_STACK, SKIP_REASON)
+class ScoreSeparationTests(SimpleTestCase):
+    """A separating floor must exist, and the fixture's must sit inside the gap.
+
+    This is the property the individual retrieval tests depend on, asserted
+    directly. It is written against the *bands* rather than a fixed threshold
+    on purpose: swapping the embedding model moves every absolute score, and a
+    test that hardcodes 0.25 would fail on a model that is doing its job
+    perfectly well. What must not change is that answerable questions score
+    above unanswerable ones by a margin something can be set inside.
+
+    It also fails loudly if FIXTURE_MIN_SCORE drifts out of that gap, which is
+    exactly how these tests broke: rag.MIN_SCORE moved 0.25 -> 0.45 for a real
+    corpus, nothing here noticed, and six answerable queries started returning
+    nothing.
+    """
+
+    def _bands(self, index):
+        """Top dense cosine per query, split by whether an answer exists."""
+        in_corpus, off_topic = [], []
+        for spec in load_query_set():
+            found = index.dense_search(spec["query"], 20, min_score=0.0)
+            top = found[0][1] if found else 0.0
+            (in_corpus if spec.get("relevant") else off_topic).append((top, spec["query"]))
+        return sorted(in_corpus), sorted(off_topic)
+
+    def test_answerable_questions_outscore_unanswerable_ones(self):
+        with isolated_index(EVAL_CORPUS) as index:
+            in_corpus, off_topic = self._bands(index)
+
+        worst_score, worst_query = in_corpus[0]
+        best_score, best_query = off_topic[-1]
+
+        self.assertGreater(
+            worst_score,
+            best_score,
+            f"the bands overlap: {worst_query!r} scored {worst_score:.4f} but "
+            f"{best_query!r} scored {best_score:.4f}, so no floor can separate them",
+        )
+
+    def test_the_fixture_floor_sits_between_the_bands(self):
+        with isolated_index(EVAL_CORPUS) as index:
+            in_corpus, off_topic = self._bands(index)
+
+        worst_score, worst_query = in_corpus[0]
+        best_score, best_query = off_topic[-1]
+
+        self.assertLess(
+            FIXTURE_MIN_SCORE,
+            worst_score,
+            f"FIXTURE_MIN_SCORE={FIXTURE_MIN_SCORE} rejects {worst_query!r}, which "
+            f"scored {worst_score:.4f} and does have an answer in this corpus",
+        )
+        self.assertGreater(
+            FIXTURE_MIN_SCORE,
+            best_score,
+            f"FIXTURE_MIN_SCORE={FIXTURE_MIN_SCORE} admits {best_query!r}, which "
+            f"scored {best_score:.4f} and has no answer in this corpus",
+        )

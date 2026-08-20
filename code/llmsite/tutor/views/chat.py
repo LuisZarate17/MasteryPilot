@@ -107,6 +107,17 @@ def _student_context(user):
         )
 
 
+def _current_session(request):
+    """The caller's active Session, or None. Ownership-scoped, like everywhere else."""
+    session_id = request.session.get("session_id")
+    if not session_id:
+        return None
+    try:
+        return Session.objects.get(id=session_id, owner=request.user)
+    except Session.DoesNotExist:
+        return None
+
+
 def _load_messages_from_db(request):
     """Reconstruct the LLM messages list from DB for the current session."""
     session_id = request.session.get("session_id")
@@ -162,6 +173,54 @@ def _try_extract_quiz_json(text: str):
     return None
 
 
+def _quiz_questions(quiz_json):
+    """Normalised question texts from a parsed quiz, for comparison.
+
+    Casefolded with whitespace collapsed, because a model asked for another
+    quiz will happily re-emit the same questions with different capitalisation
+    or spacing and that is not a different quiz.
+    """
+    test = (quiz_json or {}).get("test") or {}
+    texts = set()
+    for item in test.values():
+        if isinstance(item, dict):
+            question = item.get("question")
+            if isinstance(question, str) and question.strip():
+                texts.add(" ".join(question.split()).casefold())
+    return texts
+
+
+# Above this fraction of shared questions, a "new" quiz is the old one back.
+# Not strict equality: the model tends to re-emit two of three questions
+# verbatim and reword the third, which is still not a second quiz. Not a
+# lower bar either — one question in common between two three-question
+# quizzes on the same topic is ordinary overlap, not a repeat.
+_QUIZ_DUPLICATE_RATIO = 0.6
+
+
+def _is_duplicate_quiz(quiz_json, session):
+    """True if this quiz mostly repeats one already asked in *session*.
+
+    The model is handed the whole conversation, its own previous quiz included,
+    so on a second request it often just returns that quiz again. Nothing else
+    catches this: the stall check that would have is deliberately skipped for
+    quiz requests (see below), and _try_extract_quiz_json only cares whether
+    the JSON parses.
+    """
+    incoming = _quiz_questions(quiz_json)
+    if not incoming or session is None:
+        return False
+
+    for previous in Quiz.objects.filter(session=session).values_list("quiz_json", flat=True):
+        seen = _quiz_questions(previous)
+        if not seen:
+            continue
+        overlap = len(incoming & seen) / len(incoming)
+        if overlap >= _QUIZ_DUPLICATE_RATIO:
+            return True
+    return False
+
+
 # Phrasings that mean "give me a quiz". Used only to decide whether an
 # unparseable reply is worth regenerating, so over-matching costs one extra
 # generation and under-matching costs nothing that was not already broken.
@@ -209,6 +268,14 @@ STALL_NUDGE = (
     "forward, and repeating it will not either. Do not repeat it. Name the "
     "specific next operation to perform, or give a worked example of the same "
     "kind of step, then ask one short question.]"
+)
+
+QUIZ_VARIETY_NUDGE = (
+    "[Note to the assistant: you have already asked this student these exact "
+    "questions in this session. Write a completely new quiz. Keep the same "
+    "topic and difficulty, but every question must be one you have not asked "
+    "before — different numbers, different wording, different sub-skill. Reply "
+    "with the quiz JSON only.]"
 )
 
 
@@ -448,22 +515,49 @@ def api_chat(request):
                 else:
                     logger.warning("Regenerated reply repeated it too - sending as is")
 
-            # A quiz that does not parse fails silently: no Quiz row is written,
-            # the client renders it as an ordinary chat bubble, and the student
-            # is left with a question they cannot submit. Measured at 3 in 16.
-            # One more attempt costs a couple of seconds on the failure path
-            # only, and nothing at all on the 13 that already worked.
-            if (_looks_like_quiz_request(msg)
-                    and _try_extract_quiz_json(assistant_reply_text) is None):
-                logger.info("Quiz request did not produce JSON - regenerating once")
-                retry_text, _ = _adapter().send_message(
-                    model, tokenizer, list(history), msg, ledger=ledger
-                )
-                if _try_extract_quiz_json(retry_text) is not None:
-                    assistant_reply_text = retry_text
+            # Two ways a quiz request goes wrong, both fixed by asking again.
+            #
+            # It does not parse: no Quiz row is written, the client renders it
+            # as an ordinary chat bubble, and the student is left with a
+            # question they cannot submit. Measured at 3 in 16.
+            #
+            # Or it parses and is the previous quiz. The model is handed the
+            # whole conversation including its own last quiz, and on "give me
+            # another one" it often returns that. The stall check above would
+            # have caught a verbatim repeat, but it is skipped for quiz
+            # requests, so nothing did.
+            #
+            # One regeneration covers whichever happened — never two, so the
+            # worst case stays one extra generation as before.
+            if _looks_like_quiz_request(msg):
+                parsed = _try_extract_quiz_json(assistant_reply_text)
+                quiz_session = _current_session(request)
+
+                if parsed is None:
+                    reason, nudge = "did not produce JSON", msg
+                elif _is_duplicate_quiz(parsed, quiz_session):
+                    reason, nudge = "repeated an earlier quiz", f"{msg}\n\n{QUIZ_VARIETY_NUDGE}"
                 else:
-                    logger.warning("Regenerated quiz did not produce JSON either "
-                                   "- sending the prose reply")
+                    reason = nudge = None
+
+                if reason:
+                    logger.info("Quiz request %s - regenerating once", reason)
+                    retry_text, _ = _adapter().send_message(
+                        model, tokenizer, list(history), nudge, ledger=ledger
+                    )
+                    retry_parsed = _try_extract_quiz_json(retry_text)
+                    if retry_parsed is not None and not _is_duplicate_quiz(
+                            retry_parsed, quiz_session):
+                        assistant_reply_text = retry_text
+                    elif retry_parsed is not None and parsed is None:
+                        # Still a repeat, but at least it parses now, so the
+                        # student gets a usable quiz instead of loose prose.
+                        assistant_reply_text = retry_text
+                        logger.warning("Regenerated quiz parses but repeats an "
+                                       "earlier one - sending it anyway")
+                    else:
+                        logger.warning("Regenerated quiz %s either - sending the "
+                                       "first reply", reason)
         except Exception:
             logger.exception("send_message failed")
             assistant_reply_text = "Model error, please try again later."

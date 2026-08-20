@@ -17,6 +17,7 @@ import json
 
 from ..models import Quiz, QuizAnswer
 from ..views.chat import (
+    _is_duplicate_quiz,
     _looks_like_quiz_request,
     _maybe_persist_quiz,
     _try_extract_quiz_json,
@@ -468,3 +469,87 @@ class QuizRequestDetectionTests(MasteryPilotTestCase):
                      "Why did you subtract that?", ""]:
             with self.subTest(text=text):
                 self.assertFalse(_looks_like_quiz_request(text))
+
+
+class DuplicateQuizDetectionTests(MasteryPilotTestCase):
+    """A second quiz request must not return the first quiz.
+
+    The model is handed the whole conversation, its own previous quiz included,
+    so on "give me another one" it frequently re-emits that quiz. Nothing used
+    to catch it: the stall check in api_chat is deliberately skipped for quiz
+    requests, and _try_extract_quiz_json only asks whether the JSON parses.
+    """
+
+    def setUp(self):
+        self.student = self.make_student("dupe_student")
+        self.session = self.make_session(self.student)
+
+    @staticmethod
+    def quiz(*questions):
+        return {"test": {
+            f"q{i}": {"question": q, "type": "multiple-choice",
+                      "answers": ["a", "b"], "correct": "0"}
+            for i, q in enumerate(questions, start=1)
+        }}
+
+    def test_nothing_asked_yet_is_never_a_duplicate(self):
+        self.assertFalse(
+            _is_duplicate_quiz(self.quiz("What is 2 + 2?"), self.session)
+        )
+
+    def test_the_same_questions_again_are_a_duplicate(self):
+        self.make_quiz(self.session, self.quiz("What is 2 + 2?", "What is 3 + 3?")["test"])
+
+        self.assertTrue(
+            _is_duplicate_quiz(self.quiz("What is 2 + 2?", "What is 3 + 3?"), self.session)
+        )
+
+    def test_cosmetic_differences_are_still_a_duplicate(self):
+        """Case and spacing are not a new quiz."""
+        self.make_quiz(self.session, self.quiz("What is 2 + 2?", "What is 3 + 3?")["test"])
+
+        self.assertTrue(
+            _is_duplicate_quiz(
+                self.quiz("what is 2 + 2?", "What  is   3 + 3?"), self.session
+            )
+        )
+
+    def test_genuinely_different_questions_are_not_a_duplicate(self):
+        self.make_quiz(self.session, self.quiz("What is 2 + 2?", "What is 3 + 3?")["test"])
+
+        self.assertFalse(
+            _is_duplicate_quiz(
+                self.quiz("What is 9 - 4?", "Solve for x: x + 1 = 5"), self.session
+            )
+        )
+
+    def test_one_shared_question_out_of_three_is_ordinary_overlap(self):
+        """Two quizzes on one topic will collide sometimes. That is not a repeat."""
+        self.make_quiz(
+            self.session,
+            self.quiz("What is 2 + 2?", "What is 3 + 3?", "What is 4 + 4?")["test"],
+        )
+
+        self.assertFalse(
+            _is_duplicate_quiz(
+                self.quiz("What is 2 + 2?", "What is 7 - 1?", "What is 8 / 2?"),
+                self.session,
+            )
+        )
+
+    def test_a_duplicate_of_an_older_quiz_still_counts(self):
+        """Not just the most recent one — the whole session is checked."""
+        self.make_quiz(self.session, self.quiz("What is 2 + 2?")["test"], status="graded")
+        self.make_quiz(self.session, self.quiz("Name a prime number")["test"])
+
+        self.assertTrue(_is_duplicate_quiz(self.quiz("What is 2 + 2?"), self.session))
+
+    def test_a_quiz_with_no_questions_is_not_a_duplicate(self):
+        """Nothing to compare. The JSON retry owns malformed replies, not this."""
+        self.make_quiz(self.session, self.quiz("What is 2 + 2?")["test"])
+
+        self.assertFalse(_is_duplicate_quiz({"test": {}}, self.session))
+        self.assertFalse(_is_duplicate_quiz(None, self.session))
+
+    def test_a_session_with_no_quizzes_short_circuits(self):
+        self.assertFalse(_is_duplicate_quiz(self.quiz("What is 2 + 2?"), None))

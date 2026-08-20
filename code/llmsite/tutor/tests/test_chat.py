@@ -596,3 +596,110 @@ class SessionManagementTests(MasteryPilotTestCase):
         self.client.post(reverse("api_reset"))
 
         self.assertNotIn("session_id", self.client.session)
+
+
+class RepeatedQuizRegenerationTests(MasteryPilotTestCase):
+    """A second quiz request must not hand back the first quiz.
+
+    Complements the unit tests on _is_duplicate_quiz in test_quiz.py: these run
+    the whole api_chat path, so they also pin that the variety nudge is sent to
+    the model, never stored, and that exactly one regeneration happens.
+    """
+
+    QUIZ_A = ('{"test": {"q1": {"question": "What is 2 + 2?", "type": "multiple-choice",'
+              ' "answers": ["4", "5"], "correct": "0"}}}')
+    QUIZ_B = ('{"test": {"q1": {"question": "What is 9 - 4?", "type": "multiple-choice",'
+              ' "answers": ["5", "6"], "correct": "0"}}}')
+
+    def setUp(self):
+        self.student = self.make_student("quiz_repeat_student")
+        self.client.force_login(self.student)
+        self.session = self.make_session(self.student)
+        self.set_active_session(self.session)
+
+    def send(self, message="quiz me"):
+        return self.client.post(
+            reverse("api_chat"),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def adapter_returning(self, *replies):
+        """A FakeAdapter that returns *replies* in order, repeating the last."""
+        outer = self
+
+        class Scripted(FakeAdapter):
+            def send_message(self, model, tokenizer, messages, new_message,
+                             ledger=None, waiting_on=None):
+                self.send_message_calls.append(new_message)
+                self.ledgers_seen.append(list(ledger or []))
+                index = min(len(self.send_message_calls) - 1, len(replies) - 1)
+                return replies[index], list(messages)
+
+        del outer
+        return Scripted()
+
+    def test_a_repeated_quiz_is_regenerated(self):
+        self.make_quiz(self.session, json.loads(self.QUIZ_A)["test"])
+
+        adapter = self.adapter_returning(self.QUIZ_A, self.QUIZ_B)
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("What is 9 - 4?", response.json()["model_text"])
+        self.assertEqual(len(adapter.send_message_calls), 2)
+
+    def test_the_variety_nudge_is_sent_to_the_model(self):
+        self.make_quiz(self.session, json.loads(self.QUIZ_A)["test"])
+
+        adapter = self.adapter_returning(self.QUIZ_A, self.QUIZ_B)
+        with LoadedModel(adapter):
+            self.send()
+
+        self.assertIn("already asked", adapter.send_message_calls[1])
+
+    def test_the_nudge_is_never_stored_as_something_the_student_typed(self):
+        self.make_quiz(self.session, json.loads(self.QUIZ_A)["test"])
+
+        adapter = self.adapter_returning(self.QUIZ_A, self.QUIZ_B)
+        with LoadedModel(adapter):
+            self.send("quiz me again")
+
+        stored = list(
+            DBChat.objects.filter(session=self.session, role="user")
+            .values_list("message", flat=True)
+        )
+        self.assertIn("quiz me again", stored)
+        self.assertFalse([m for m in stored if "Note to the assistant" in m])
+
+    def test_a_fresh_quiz_is_not_regenerated(self):
+        """The common path costs nothing extra."""
+        self.make_quiz(self.session, json.loads(self.QUIZ_A)["test"])
+
+        adapter = self.adapter_returning(self.QUIZ_B)
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertEqual(len(adapter.send_message_calls), 1)
+        self.assertIn("What is 9 - 4?", response.json()["model_text"])
+
+    def test_a_stubborn_repeat_is_still_delivered(self):
+        """Better a repeated quiz the student can answer than prose they cannot."""
+        self.make_quiz(self.session, json.loads(self.QUIZ_A)["test"])
+
+        adapter = self.adapter_returning(self.QUIZ_A, self.QUIZ_A)
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("What is 2 + 2?", response.json()["model_text"])
+        self.assertEqual(len(adapter.send_message_calls), 2, "must not retry twice")
+
+    def test_the_first_quiz_of_a_session_is_never_regenerated(self):
+        adapter = self.adapter_returning(self.QUIZ_A)
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertEqual(len(adapter.send_message_calls), 1)
+        self.assertIn("What is 2 + 2?", response.json()["model_text"])

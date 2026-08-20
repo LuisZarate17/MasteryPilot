@@ -14,12 +14,14 @@ numbers: the floors get set from a measured baseline, not from a guess.
 """
 
 import json
+import os
 
 from django.core.management.base import BaseCommand, CommandError
 
 from ._rag_harness import (
     EVAL_CORPUS,
     EVAL_QUERIES,
+    FIXTURE_MIN_SCORE,
     MissingStackError,
     evaluate,
     format_metric,
@@ -38,6 +40,11 @@ class Command(BaseCommand):
         parser.add_argument("--top-k", type=int, default=None, help="Defaults to rag.TOP_K.")
         parser.add_argument("--chunk-size", type=int, default=None, help="Override for sweeps.")
         parser.add_argument("--chunk-overlap", type=int, default=None, help="Override for sweeps.")
+        parser.add_argument(
+            "--min-score", type=float, default=None,
+            help="Cosine floor. Defaults to FIXTURE_MIN_SCORE for the built-in "
+                 "fixture and rag.MIN_SCORE for any other corpus.",
+        )
         parser.add_argument("--save-baseline", default=None, help="Write metrics to this path.")
         parser.add_argument("--compare", default=None, help="Diff metrics against this baseline.")
         parser.add_argument("--json", dest="json_out", default=None, help="Dump per-query rows.")
@@ -56,6 +63,17 @@ class Command(BaseCommand):
         top_k = options["top_k"] or rag.TOP_K
         queries = load_query_set(options["queries"])
 
+        # The fixture's scores sit in a lower band than a real curriculum's, so
+        # it needs its own floor — see FIXTURE_MIN_SCORE. Defaulting by corpus
+        # rather than always using rag.MIN_SCORE keeps the built-in run honest
+        # without misrepresenting what the production floor does.
+        if options["min_score"] is not None:
+            min_score = options["min_score"]
+        elif os.path.abspath(options["corpus"]) == os.path.abspath(EVAL_CORPUS):
+            min_score = FIXTURE_MIN_SCORE
+        else:
+            min_score = rag.MIN_SCORE
+
         self.stdout.write(f"Indexing {options['corpus']} ...")
         with isolated_index(
             options["corpus"],
@@ -66,11 +84,12 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"Indexed {chunks} chunks "
                 f"(chunk_size={rag.CHUNK_SIZE}, overlap={rag.CHUNK_OVERLAP}, "
-                f"model={rag.EMBED_MODEL})\n"
+                f"model={rag.EMBED_MODEL}, min_score={min_score})\n"
             )
-            rows, summary = evaluate(indexed, queries, top_k)
+            rows, summary = evaluate(indexed, queries, top_k, min_score=min_score)
 
         summary["chunks"] = chunks
+        summary["min_score"] = min_score
         self._report(rows, summary, top_k, options["verbosity"])
 
         if options["compare"]:

@@ -255,10 +255,27 @@ real FAISS index:
 
 There is also a 23-query, 6-document fixture in `tutor/tests/fixtures/eval/`
 that `rag_eval` and the dispatch-only `rag-verify` workflow run against. It is a
-fast regression check, not evidence about a real curriculum: it still passes at
-the new floor, but its worst in-corpus query clears the threshold by 0.012. An
-earlier version of this file quoted a separation figure from that small corpus
-as if it characterised the retriever. It did not. A small corpus is not
+fast regression check on ranking and rejection, not evidence about a real
+curriculum.
+
+It runs at its own floor, and the reason is the point. The two corpora produce
+different score distributions:
+
+| corpus | in-corpus min | off-topic max | floor |
+| --- | --- | --- | --- |
+| OpenStax, 5,125 chunks | 0.4564 | 0.4058 | 0.45 |
+| fixture, 6 documents | 0.3019 | 0.1243 | 0.25 |
+
+Each floor sits in its own corpus's gap and neither works on the other. Six short
+documents contain nothing that resembles an unrelated question, so off-topic
+queries score far lower here than against five thousand chunks of textbook —
+which is exactly why a corpus this small cannot be used to calibrate the real
+floor, and why raising `MIN_SCORE` to 0.45 made the fixture start rejecting 6 of
+its 20 answerable queries until it was given its own.
+
+Two earlier versions of this section got this wrong: one quoted a separation
+figure from the small corpus as if it characterised the retriever, and one
+claimed the fixture still passed at 0.45 when it did not. A small corpus is not
 reassurance.
 
 ## Configuration

@@ -25,6 +25,28 @@ EVAL_DIR = os.path.join(
 EVAL_CORPUS = os.path.join(EVAL_DIR, "corpus")
 EVAL_QUERIES = os.path.join(EVAL_DIR, "queries.json")
 
+# The cosine floor for THIS fixture only. Not a second opinion about
+# rag.MIN_SCORE — a different corpus with a different score distribution.
+#
+# Measured with all-MiniLM-L6-v2 over the labelled query set:
+#
+#     corpus                     in-corpus min   off-topic max
+#     OpenStax, 5,125 chunks            0.4564          0.4058
+#     this fixture, 6 documents         0.3019          0.1243
+#
+# Both floors sit in their own corpus's gap, and neither works on the other.
+# rag.MIN_SCORE = 0.45 is correct for a real curriculum and must stay: at 0.25 a
+# five-thousand-chunk corpus always has something clearing the floor, which is
+# how "what is the capital of France" once came back with algebra. Applied here
+# it rejects 6 of 20 in-corpus queries, because six short documents contain
+# nothing that resembles an unrelated question — the very property that makes a
+# small corpus useless for calibrating the real floor.
+#
+# So the fixture keeps its own number, and neither one is evidence about the
+# other. Its purpose is a fast regression check on ranking and rejection, not a
+# claim about retrieval quality on real curricula.
+FIXTURE_MIN_SCORE = 0.25
+
 
 class MissingStackError(RuntimeError):
     """The RAG stack is not installed in this environment."""
@@ -113,11 +135,18 @@ def _sources_of(hits):
     return ordered
 
 
-def evaluate(rag_module, queries, top_k):
-    """Run every query and return per-query rows plus aggregate metrics."""
+def evaluate(rag_module, queries, top_k, min_score=None):
+    """Run every query and return per-query rows plus aggregate metrics.
+
+    *min_score* is the cosine floor for the dense leg. None means whatever
+    rag.MIN_SCORE is set to, which is calibrated for a real curriculum — pass
+    FIXTURE_MIN_SCORE when evaluating the checked-in fixture, or every metric
+    reports on a floor the corpus cannot clear.
+    """
+    kwargs = {} if min_score is None else {"min_score": min_score}
     rows = []
     for spec in queries:
-        hits = rag_module.retrieve(spec["query"], top_k=top_k)
+        hits = rag_module.retrieve(spec["query"], top_k=top_k, **kwargs)
         ranked = _sources_of(hits)
         relevant = set(spec.get("relevant") or [])
 
