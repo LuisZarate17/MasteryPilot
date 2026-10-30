@@ -6,7 +6,7 @@ Every model runs on the district's own hardware, so student conversations never
 leave the building.
 
 [![tests](https://github.com/LuisZarate17/MasteryPilot/actions/workflows/tests.yml/badge.svg)](https://github.com/LuisZarate17/MasteryPilot/actions/workflows/tests.yml)
-![tests: 508](https://img.shields.io/badge/tests-492-brightgreen)
+![tests: 508](https://img.shields.io/badge/tests-508-brightgreen)
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![Django](https://img.shields.io/badge/Django-5.2-092E20?logo=django&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
