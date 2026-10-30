@@ -85,6 +85,15 @@ A team capstone for **WSU CPT_S 421/423**, built by
 [Jesse Boakye](https://github.com/jesseboakye) and
 [Luis Zarate](https://github.com/LuisZarate17).
 
+**What Luis built.** During the capstone: chat sessions, quiz submission and
+grading, student import, and session auto-titling on the Django backend. After it,
+62 commits of solo work on this fork: removed shipped credentials and moved all
+secrets to environment variables, closed two access-control gaps, collapsed four
+LLM adapters into one config-driven module, purged large binaries from git
+history, rebuilt the retrieval pipeline (hybrid search, chunks sized to the
+model's context window, recall and MRR scored on a labelled query set), and added
+CI that runs the test suite on every push.
+
 It is a prototype, not a product. Read [Known Problems](#known-problems) before
 putting it in front of students — the guardrails in particular do not hold.
 
