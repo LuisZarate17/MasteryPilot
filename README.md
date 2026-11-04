@@ -99,14 +99,14 @@ putting it in front of students — the guardrails in particular do not hold.
 
 ## Tested
 
-492 tests in under a second, **no GPU and no model download required** — the
+508 tests in under a second, **no GPU and no model download required** — the
 suite mocks the adapter and runs on the 3-package core install.
 
 ```
 cd code/llmsite && python manage.py test
 ```
 
-475 of them run there. The other 17 need real embeddings and a real FAISS index,
+489 of them run there. The other 19 need real embeddings and a real FAISS index,
 so they skip with a message saying so and are covered by the separate
 `rag-verify` workflow, which installs the full stack on demand.
 
