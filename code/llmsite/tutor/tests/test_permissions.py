@@ -12,10 +12,13 @@ are easy to get wrong and are pinned deliberately:
 * A user with no profile at all is a de-facto student.
 """
 
+from django.contrib.auth import get_user_model
 from django.urls import reverse
+from unittest.mock import patch
 import json
 
-from .base import MasteryPilotTestCase
+from ..models import AdminProfile, Chat, QuizAnswer, StudentProfile, TeacherProfile
+from .base import PASSWORD, FakeAdapter, MasteryPilotTestCase
 
 
 class RoleHelperTests(MasteryPilotTestCase):
@@ -329,3 +332,201 @@ class SuperuserAccessTests(MasteryPilotTestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
+
+class CrossStudentSessionTests(MasteryPilotTestCase):
+    """A student who knows another student's session id cannot act on it.
+
+    Each test plays the attacker and then re-reads the victim's rows from the
+    database, so a pass means nothing changed rather than only that the status
+    code looked right.
+    """
+
+    def setUp(self):
+        self.attacker = self.make_student("xs_attacker")
+        self.victim = self.make_student("xs_victim")
+        self.victim_session = self.make_session(self.victim, title="Victim original")
+        self.make_chat(self.victim_session, "user", "victim says hi")
+        self.attacker_session = self.make_session(self.attacker, title="Attacker own")
+        self.client.force_login(self.attacker)
+
+    def post_json(self, name, payload, **url_kwargs):
+        return self.client.post(
+            reverse(name, **url_kwargs),
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_cannot_rename_another_students_session(self):
+        response = self.post_json(
+            "api_rename_session", {"title": "pwned"}, args=[self.victim_session.id]
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.victim_session.refresh_from_db()
+        self.assertEqual(self.victim_session.title, "Victim original")
+
+    def test_cannot_select_another_students_session(self):
+        self.set_active_session(self.attacker_session)
+
+        response = self.client.post(
+            reverse("api_select_session", args=[self.victim_session.id])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        active = self.client.session.get("session_id")
+        self.assertNotEqual(active, str(self.victim_session.id))
+        self.assertEqual(active, str(self.attacker_session.id))
+
+    def test_cannot_init_another_students_session(self):
+        before = Chat.objects.filter(session=self.victim_session).count()
+
+        with patch("tutor.views.chat._adapter", return_value=FakeAdapter()):
+            response = self.client.post(
+                reverse("api_session_init", args=[self.victim_session.id])
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            Chat.objects.filter(session=self.victim_session).count(), before
+        )
+        self.assertNotEqual(
+            self.client.session.get("session_id"), str(self.victim_session.id)
+        )
+
+    def test_cannot_grade_against_another_students_session(self):
+        quiz = self.make_quiz(self.victim_session, {"q1": self.mc_question()})
+        quiz_json_before = json.loads(json.dumps(quiz.quiz_json))
+        self.set_active_session(self.victim_session)
+
+        response = self.post_json("api_grade_quiz", {"answers": "1"})
+
+        self.assertEqual(response.status_code, 400)
+        quiz.refresh_from_db()
+        self.assertEqual(quiz.status, "active")
+        self.assertEqual(quiz.quiz_json, quiz_json_before)
+        self.assertEqual(quiz.earned_pts, 0.0)
+        self.assertEqual(quiz.possible_pts, 0.0)
+        self.assertIsNone(quiz.ended_at)
+        self.assertFalse(QuizAnswer.objects.filter(quiz=quiz).exists())
+
+    def test_cannot_chat_into_another_students_session(self):
+        before = Chat.objects.filter(session=self.victim_session).count()
+        self.set_active_session(self.victim_session)
+        adapter = FakeAdapter()
+
+        with patch("tutor.views.chat._adapter", return_value=adapter):
+            response = self.post_json("api_chat", {"message": "planted message"})
+
+        # The planted id fails the owner filter, so there is no active chat.
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(adapter.send_message_calls, [])
+        self.assertEqual(
+            Chat.objects.filter(session=self.victim_session).count(), before
+        )
+        self.assertFalse(
+            Chat.objects.filter(message__contains="planted message").exists()
+        )
+
+    def test_anonymous_cannot_touch_a_session(self):
+        self.client.logout()
+        cases = (
+            ("api_rename_session", {"title": "pwned"}),
+            ("api_select_session", {}),
+            ("api_session_init", {}),
+        )
+        before = Chat.objects.filter(session=self.victim_session).count()
+
+        for name, payload in cases:
+            with self.subTest(view=name):
+                response = self.post_json(
+                    name, payload, args=[self.victim_session.id]
+                )
+                self.assertIn(response.status_code, (302, 405))
+                if response.status_code == 302:
+                    self.assertIn("login", response["Location"])
+
+        self.victim_session.refresh_from_db()
+        self.assertEqual(self.victim_session.title, "Victim original")
+        self.assertEqual(
+            Chat.objects.filter(session=self.victim_session).count(), before
+        )
+        self.assertIsNone(self.client.session.get("session_id"))
+
+
+class StudentIdParameterTests(MasteryPilotTestCase):
+    """?student_id= is a teacher/admin feature; a student's copy is ignored."""
+
+    def setUp(self):
+        self.student = self.make_student("sid_student")
+        self.other = self.make_student("sid_other")
+        self.make_session(self.student, title="Own distinctive title")
+        self.make_session(self.other, title="Other distinctive title")
+        self.client.force_login(self.student)
+
+    def test_progress_detail_ignores_student_id_for_a_student(self):
+        response = self.client.get(
+            reverse("progress_detail"), {"student_id": self.other.id}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["target_user"], self.student)
+        self.assertNotEqual(response.context["target_user"], self.other)
+        titles = [s["title"] for s in response.context["session_history"]]
+        self.assertEqual(titles, ["Own distinctive title"])
+        content = response.content.decode()
+        self.assertNotIn("Other distinctive title", content)
+        self.assertNotIn(self.other.username, content)
+
+    def test_list_sessions_ignores_student_id_for_a_student(self):
+        response = self.client.get(
+            reverse("api_list_sessions"), {"student_id": self.other.id}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        titles = [s["title"] for s in json.loads(response.content)["sessions"]]
+        self.assertEqual(titles, ["Own distinctive title"])
+        self.assertNotIn("Other distinctive title", response.content.decode())
+
+
+class SignupCannotCreateStaffTests(MasteryPilotTestCase):
+    def test_extra_privilege_fields_are_ignored(self):
+        from ..utils import is_admin, is_teacher_or_admin
+
+        response = self.client.post(
+            reverse("signup"),
+            {
+                "username": "sneaky_signup",
+                "email": "sneaky@example.com",
+                "full_name": "Sneaky Signup",
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+                "is_staff": "on",
+                "is_superuser": "on",
+                "role": "admin",
+                "teacher": "1",
+                "is_teacher": "on",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        user = get_user_model().objects.get(username="sneaky_signup")
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
+        self.assertTrue(StudentProfile.objects.filter(user=user).exists())
+        self.assertFalse(TeacherProfile.objects.filter(user=user).exists())
+        self.assertFalse(AdminProfile.objects.filter(user=user).exists())
+        self.assertFalse(is_admin(user))
+        self.assertFalse(is_teacher_or_admin(user))
+
+
+class StudentCurriculumViewTests(MasteryPilotTestCase):
+    def test_student_cannot_view_curriculum_files(self):
+        self.client.force_login(self.make_student("cur_student"))
+
+        response = self.client.get(
+            reverse("curriculum_view", args=["anything.pdf"])
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/login/"))
