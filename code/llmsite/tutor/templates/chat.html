@@ -268,7 +268,7 @@
           "X-CSRFToken": csrftoken
         },
         credentials: "same-origin",
-        body: JSON.stringify({ answers: csvString })
+        body: JSON.stringify({ answers: csvString, session_id: currentSessionId })
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
@@ -564,7 +564,16 @@
         credentials: "same-origin",
         body: JSON.stringify({})
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        // The server explains itself in JSON ({"error": ...}); show that rather
+        // than the raw body.
+        const body = await res.text();
+        let message = body;
+        try {
+          message = JSON.parse(body).error || body;
+        } catch (_) {}
+        throw new Error(message);
+      }
       const data = await res.json();
       currentSessionId = data.id;
 
