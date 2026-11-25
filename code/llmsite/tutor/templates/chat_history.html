@@ -243,7 +243,7 @@ async function loadSessions() {
       li.dataset.sessionId = session.id;
 
       li.innerHTML = `
-        <span class="session-title">${session.title}</span>
+        <span class="session-title">${escapeHtml(session.title)}</span>
         <div class="flex gap-2">
         </div>
       `;
