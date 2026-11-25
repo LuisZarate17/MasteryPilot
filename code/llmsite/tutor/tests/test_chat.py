@@ -111,6 +111,7 @@ class BootstrapHelperTests(MasteryPilotTestCase):
         student = self.make_student("boot_student2")
         session = self.make_session(student)
         self.make_chat(session, "user", "Here is your student information:\nName: Ada")
+        self.make_chat(session, "assistant", "Hello!")
         self.make_chat(session, "user", "How do fractions work?")
 
         self.assertTrue(_has_student_message(session))

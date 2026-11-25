@@ -97,30 +97,35 @@ class SessionMessagesPayloadTests(MasteryPilotTestCase):
     def test_bootstrap_and_system_turns_are_hidden(self):
         self.make_chat(self.session, "system", "TUTOR SYSTEM PROMPT")
         self.make_chat(self.session, "user", "Here is your student information ...")
+        self.make_chat(self.session, "assistant", "Hello!")
         self.make_chat(self.session, "user", "How do fractions work?")
         self.make_chat(self.session, "assistant", "A fraction is ...")
         self.client.force_login(self.student)
 
         messages = self.payload()["messages"]
 
-        self.assertEqual(len(messages), 2)
-        self.assertEqual(messages[0]["text"], "How do fractions work?")
+        self.assertEqual(len(messages), 3)
+        self.assertEqual(messages[1]["text"], "How do fractions work?")
         self.assertNotIn(
             "student information", json.dumps(messages)
         )
 
     def test_legacy_bootstrap_shape_is_also_hidden(self):
-        """Sessions written before the adapter consolidation used a bare form."""
+        """Sessions written before the adapter consolidation used a bare form.
+
+        With no system row before it, it is recognised by its shape, but only
+        as the session's first row; later rows are never hidden by shape.
+        """
         self.make_chat(
             self.session, "user", "Name: Ada\nSchool: WSU\nGrade: 11\nClasses: Math"
         )
+        self.make_chat(self.session, "assistant", "Hello!")
         self.make_chat(self.session, "user", "Real question")
         self.client.force_login(self.student)
 
         messages = self.payload()["messages"]
 
-        self.assertEqual(len(messages), 1)
-        self.assertEqual(messages[0]["text"], "Real question")
+        self.assertEqual([m["text"] for m in messages], ["Hello!", "Real question"])
 
     def test_viewing_own_session_sets_it_active_for_chat(self):
         self.client.force_login(self.student)

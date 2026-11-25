@@ -51,6 +51,13 @@
   </nav>
 
   <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {% if messages %}
+    <div role="status" aria-live="polite" class="mb-4 space-y-2">
+      {% for m in messages %}
+      <div class="rounded-lg px-4 py-2 border {% if m.tags == 'error' %}bg-red-50 text-red-800 border-red-200{% else %}bg-green-50 text-green-800 border-green-200{% endif %}">{{ m }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 

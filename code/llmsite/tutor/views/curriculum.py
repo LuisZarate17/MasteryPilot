@@ -2,6 +2,7 @@
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.http import FileResponse, Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect
@@ -17,7 +18,7 @@ import re
 
 from ..models import Chat as DBChat, Session, StudentProfile, TeacherProfile
 from ..utils import is_admin, is_teacher_or_admin
-from .chat import _is_bootstrap_user_message
+from .chat import _visible_chats
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +118,11 @@ def upload_curriculum(request):
     file = request.FILES.get("file")
 
     if not file:
+        messages.error(request, "Choose a file to upload.")
         return redirect("dashboard")
 
     if file.size > MAX_UPLOAD_SIZE:
+        messages.error(request, "That file is too large. The limit is 100 MB.")
         return redirect("dashboard")
 
     filename = get_valid_filename(file.name)
@@ -129,10 +132,16 @@ def upload_curriculum(request):
     ext = dot_ext.lstrip(".").lower()
 
     if ext not in ALLOWED_UPLOAD_TYPES:
+        messages.error(
+            request,
+            "Unsupported file type. Upload one of: "
+            + ", ".join(f".{e}" for e in ALLOWED_UPLOAD_TYPES) + ".",
+        )
         return redirect("dashboard")
 
     # Verify the declared content type is plausible for that extension
     if _declared_type(file) not in ALLOWED_UPLOAD_TYPES[ext]:
+        messages.error(request, f"{filename} does not look like a .{ext} file.")
         return redirect("dashboard")
 
     os.makedirs(settings.CURRICULUM_ROOT, exist_ok=True)
@@ -141,6 +150,18 @@ def upload_curriculum(request):
     destination = os.path.realpath(os.path.join(settings.CURRICULUM_ROOT, safe_name))
 
     if not destination.startswith(os.path.realpath(str(settings.CURRICULUM_ROOT))):
+        messages.error(request, "That file name is not allowed.")
+        return redirect("dashboard")
+
+    # The library is shared, so a teacher must not silently overwrite a
+    # document another teacher uploaded. Only an administrator replaces one.
+    replacing = os.path.exists(destination)
+    if replacing and not is_admin(request.user):
+        messages.error(
+            request,
+            f"A file named {safe_name} already exists. Ask an administrator "
+            "to replace it, or upload it under a different name.",
+        )
         return redirect("dashboard")
 
     with open(destination, "wb+") as dest:
@@ -149,7 +170,22 @@ def upload_curriculum(request):
 
     _invalidate_rag_index()
 
+    messages.success(
+        request, f"Replaced {safe_name}." if replacing else f"Uploaded {safe_name}."
+    )
     return redirect("dashboard")
+
+
+# A spreadsheet runs a cell that starts with one of these as a formula, and
+# the message, title and names in an export are all written by students.
+_CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _csv_safe(value):
+    """*value* with a leading ' if a spreadsheet would read it as a formula."""
+    if isinstance(value, str) and value.startswith(_CSV_FORMULA_PREFIXES):
+        return "'" + value
+    return value
 
 
 @login_required
@@ -201,17 +237,19 @@ def api_export_chats(request):
     # same 2,608 characters — and it lives in source, so exporting it tells a
     # teacher nothing while making the file harder to read. The bootstrap turn
     # is persisted with role="user" so the model sees the conversation it had,
-    # but the student never typed it.
+    # but the student never typed it. _visible_chats drops both, per session.
+    chats_by_session = {}
+    for chat in (
+        DBChat.objects
+        .filter(session_id__in=session_ids)
+        .select_related("session")
+        .order_by("session__created_at", "created_at", "id")
+    ):
+        chats_by_session.setdefault(chat.session_id, []).append(chat)
     chats = [
         chat
-        for chat in (
-            DBChat.objects
-            .filter(session_id__in=session_ids)
-            .exclude(role="system")
-            .select_related("session")
-            .order_by("session__created_at", "created_at", "id")
-        )
-        if not (chat.role == "user" and _is_bootstrap_user_message(chat.message))
+        for session_chats in chats_by_session.values()
+        for chat in _visible_chats(session_chats)
     ]
 
     exported_at = timezone.now()
@@ -240,14 +278,14 @@ def api_export_chats(request):
         for chat in chats:
             writer.writerow([
                 target_user.id,
-                target_user.username,
-                student_name,
+                _csv_safe(target_user.username),
+                _csv_safe(student_name),
                 str(chat.session_id),
-                chat.session.title,
+                _csv_safe(chat.session.title),
                 chat.session.created_at.isoformat(),
                 chat.created_at.isoformat(),
                 chat.role,
-                chat.message,
+                _csv_safe(chat.message),
             ])
         return response
 

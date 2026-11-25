@@ -64,11 +64,10 @@ def ensure_llm_initialized():
 
 
 def _is_bootstrap_user_message(text: str) -> bool:
-    """True for the student-information turn the backend sends on start_chat.
+    """True if *text* opens like the student-information turn start_chat sends.
 
-    It is stored with role="user" so the model sees the conversation it
-    actually had, but the student never typed it, so it must not be shown in
-    chat history and must not count as their first message.
+    Text only, so a student can type the same words: never use this to decide
+    what is shown or exported. _visible_chats does that, by position.
     """
     if not text:
         return False
@@ -76,21 +75,55 @@ def _is_bootstrap_user_message(text: str) -> bool:
     if stripped.startswith("Here is your student information"):
         return True
     # Bare "Name:/School:/Grade:" shape, written by adapters predating the
-    # consolidation in languagemodel.py. Kept so upgraded deployments do not
-    # start showing the bootstrap turn in old sessions.
+    # consolidation in languagemodel.py.
     if stripped.startswith("Name:") and "School:" in stripped and "Grade:" in stripped:
         return True
     return False
 
 
+def _visible_chats(chats):
+    """The rows of one session, in order, that are conversation rather than scaffolding.
+
+    Two kinds of row are not. role="system" is the tutor instructions block.
+    The bootstrap turn start_chat sends is stored with role="user" so the
+    model sees the conversation it really had, but the student never typed it.
+
+    Only the first non-system row of a session can be the bootstrap turn, and
+    it is one when it directly follows the system row or, for sessions written
+    before the system row existed, when it has the bootstrap's shape. That
+    slot is written when the session is created, so a student cannot put
+    anything in it; every later row is shown whatever it says. Matching text
+    on any row instead let a student hide a message from their teacher and
+    from exports by opening it with the bootstrap's words.
+
+    Deliberately narrower than languagemodel.student_turns ("every user row
+    before the first assistant row"). For oversight, hiding too little is the
+    safe failure: with an empty greeting, which is not persisted, that wider
+    rule would hide the student's first message.
+    """
+    visible = []
+    previous_role = None
+    seen_first_row = False
+    for chat in chats:
+        if chat.role == "system":
+            previous_role = "system"
+            continue
+        is_bootstrap = (
+            not seen_first_row
+            and chat.role == "user"
+            and (previous_role == "system" or _is_bootstrap_user_message(chat.message))
+        )
+        seen_first_row = True
+        previous_role = chat.role
+        if not is_bootstrap:
+            visible.append(chat)
+    return visible
+
+
 def _has_student_message(session) -> bool:
     """True once the student has sent a message of their own."""
-    return any(
-        not _is_bootstrap_user_message(m)
-        for m in DBChat.objects.filter(session=session, role="user").values_list(
-            "message", flat=True
-        )
-    )
+    chats = DBChat.objects.filter(session=session).order_by("created_at", "id")
+    return any(chat.role == "user" for chat in _visible_chats(chats))
 
 
 def _student_context(user):
@@ -799,17 +832,9 @@ def api_session_messages(request, session_id):
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")  # keep chronological order
     # Hide bootstrap messages from the UI. They are persisted so the LLM can
     # reconstruct context in _load_messages_from_db, but they must never be
-    # shown to the student when viewing chat history (issue #35).
-    # Two things to hide:
-    #   1. role="system" rows (the tutor instructions block)
-    #   2. The auto-generated "Here is your student information..." user
-    #      message the backend sends on start_chat — the student never typed it.
-    messages = [
-        {"role": c.role, "text": c.message}
-        for c in chats
-        if c.role != "system"
-        and not (c.role == "user" and _is_bootstrap_user_message(c.message))
-    ]
+    # shown to the student when viewing chat history (issue #35): the system
+    # prompt and the student-information turn sent before the first reply.
+    messages = [{"role": c.role, "text": c.message} for c in _visible_chats(chats)]
 
     quizzes = list(Quiz.objects.filter(session=session).order_by("started_at", "id"))
     quiz_answers = [quiz.answers.order_by("-submitted_at").first() for quiz in quizzes]
