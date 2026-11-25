@@ -1,5 +1,6 @@
 <!-- chat.html -->
 {% extends "base.html" %}
+{% load static %}
 {% block title %}Chat · MasteryPilot{% endblock %}
 {% block content %}
 <div class="grid lg:grid-cols-[240px_minmax(0,1fr)] gap-6">
@@ -69,10 +70,10 @@
 {% endblock %}
 
 {% block scripts %}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<link rel="stylesheet" href="{% static 'vendor/katex-0.16.11/katex.min.css' %}">
+<script src="{% static 'vendor/marked-14.1.3/marked.min.js' %}"></script>
+<script src="{% static 'vendor/katex-0.16.11/katex.min.js' %}"></script>
+<script src="{% static 'vendor/dompurify-3.1.6/purify.min.js' %}"></script>
 <script>
   // --- CSRF helpers (must be first) ---
   function getCookie(name) {
@@ -351,7 +352,7 @@
         formatted += correct
           ? `<span class='inline-block h-6 w-6 bg-brand-600 rounded-full flex items-center justify-center text-white font-bold'>✓</span>`
           : `<span class='inline-block h-6 w-6 bg-red-500 rounded-full flex items-center justify-center text-white font-bold'>✗</span>`;
-        formatted += `<div><span class='font-semibold'>${qid.toUpperCase()}:</span> `;
+        formatted += `<div><span class='font-semibold'>${escapeHtml(qid.toUpperCase())}:</span> `;
         formatted += correct
           ? `<span class='text-brand-700'>Correct</span>`
           : `<span class='text-red-600'>Incorrect</span>`;
@@ -416,6 +417,11 @@
   function renderMarkdownWithMath(text) {
     const src = String(text || "");
     if (!src) return "";
+    // Without both libraries, show plain text: never hand back HTML that has
+    // not been through the sanitiser.
+    if (typeof marked === "undefined" || !marked.parse || typeof DOMPurify === "undefined") {
+      return escapeHtml(src).replace(/\n/g, "<br>");
+    }
     const placeholders = [];
     const takePlaceholder = (expr, display) => {
       const idx = placeholders.length;
@@ -457,12 +463,9 @@
       }
     });
 
-    if (typeof DOMPurify !== "undefined") {
-      return DOMPurify.sanitize(html, {
-        ADD_ATTR: ["style", "aria-hidden"],
-      });
-    }
-    return html;
+    return DOMPurify.sanitize(html, {
+      ADD_ATTR: ["style", "aria-hidden"],
+    });
   }
 
   function renderReadOnlyQuiz(quizObj, quizAttempt) {

@@ -120,6 +120,11 @@ echo_step "Run migrations"
 ADMIN_PASS="$(sed -n 's/^ADMIN_PASS=//p' "${ENV_FILE}" | head -n 1)"
 "${VENV_BIN}/python" "${PROJECT_DIR}/manage.py" migrate --noinput
 
+echo_step "Collect static files"
+# gunicorn does not serve static files itself; WhiteNoise serves them from
+# STATIC_ROOT, which this fills.
+"${VENV_BIN}/python" "${PROJECT_DIR}/manage.py" collectstatic --noinput
+
 if [[ -z "${ADMIN_PASS:-}" ]]; then
   echo
   echo "NOTE: no admin account was created (ADMIN_PASS is empty)."
