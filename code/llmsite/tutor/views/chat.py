@@ -17,6 +17,9 @@ from ..utils import calculate_student_progress, is_admin, is_teacher_or_admin, p
 
 logger = logging.getLogger(__name__)
 
+# SQLite does not enforce CharField max_length, so the views have to.
+MAX_TITLE_LENGTH = Session._meta.get_field("title").max_length
+
 
 model = None
 
@@ -386,6 +389,8 @@ def api_new_session(request):
         return HttpResponseBadRequest("Invalid JSON")
 
     title = (data.get("title") or "New session").strip() or "New session"
+    if len(title) > MAX_TITLE_LENGTH:
+        return HttpResponseBadRequest(f"title must be at most {MAX_TITLE_LENGTH} characters")
 
     # Create DB session (we keep the session record)
     session = Session.objects.create(owner=request.user, title=title)
@@ -585,7 +590,7 @@ def api_chat(request):
                     logger.exception("Auto-titling failed")
                     derived = ""
                 if derived:
-                    session.title = derived
+                    session.title = derived[:MAX_TITLE_LENGTH]
                     session.save(update_fields=["title"])
                     new_session_title = session.title
 
@@ -828,6 +833,8 @@ def api_rename_session(request, session_id):
     new_title = (data.get("title") or "").strip()
     if not new_title:
         return HttpResponseBadRequest("title is required")
+    if len(new_title) > MAX_TITLE_LENGTH:
+        return HttpResponseBadRequest(f"title must be at most {MAX_TITLE_LENGTH} characters")
     session = get_object_or_404(Session, id=session_id, owner=request.user)
     session.title = new_title
     session.save(update_fields=["title"])
