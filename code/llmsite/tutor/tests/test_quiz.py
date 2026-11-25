@@ -144,7 +144,8 @@ class QuizGradingTests(MasteryPilotTestCase):
         self.assertEqual(quiz.earned_pts, 2.0)  # q2 wrong
         self.assertIsNotNone(quiz.ended_at)
 
-    def test_points_key_is_honoured(self):
+    def test_points_key_is_ignored(self):
+        """Every question is worth one point, whatever the model wrote."""
         self.make_quiz(
             self.session,
             {
@@ -156,8 +157,8 @@ class QuizGradingTests(MasteryPilotTestCase):
         self.grade("1,2")
 
         quiz = Quiz.objects.get(session=self.session)
-        self.assertEqual(quiz.possible_pts, 6.0)
-        self.assertEqual(quiz.earned_pts, 5.0)
+        self.assertEqual(quiz.possible_pts, 2.0)
+        self.assertEqual(quiz.earned_pts, 1.0)  # q1 right (worth 1, not 5), q2 wrong
 
     def test_non_numeric_answers_compare_case_insensitively(self):
         self.make_quiz(
@@ -266,18 +267,20 @@ class QuizExtractionTests(MasteryPilotTestCase):
 
     def test_single_quotes_are_recovered(self):
         self.assertIsNotNone(
-            _try_extract_quiz_json("{'test': {'q1': {'correct': '0'}}}")
+            _try_extract_quiz_json("{'test': {'q1': {'question': '2+2?', 'correct': '0'}}}")
         )
 
     def test_trailing_commas_are_recovered(self):
         self.assertIsNotNone(
-            _try_extract_quiz_json('{"test": {"q1": {"correct": "0",},}}')
+            _try_extract_quiz_json('{"test": {"q1": {"question": "2+2?", "correct": "0",},}}')
         )
 
     def test_quiz_and_questions_keys_are_normalised_to_test(self):
         for key in ("quiz", "questions"):
             with self.subTest(key=key):
-                result = _try_extract_quiz_json('{"%s": {"q1": {"correct": "0"}}}' % key)
+                result = _try_extract_quiz_json(
+                    '{"%s": {"q1": {"question": "2+2?", "correct": "0"}}}' % key
+                )
                 self.assertIn("test", result)
 
     def test_bare_question_keys_are_treated_as_a_test(self):

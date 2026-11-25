@@ -6,6 +6,7 @@ from django.http import HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
+import copy
 import json
 import logging
 import random
@@ -147,11 +148,15 @@ def _load_messages_from_db(session):
     return [{"role": c.role, "content": c.message} for c in chats]
 
 
-def _try_extract_quiz_json(text: str):
+def _parse_quiz_json(text: str):
     """
-    Robustly extract JSON quiz object from model text.
+    Lenient parse of a quiz-shaped JSON object out of model text.
     Handles fenced code blocks and extraneous surrounding text.
-    Returns a normalized dict like {"test": {...}} or None.
+    Returns a normalized dict like {"test": {...}} or None. Does not check that
+    the quiz is usable: _try_extract_quiz_json does. This one is for deciding
+    whether a stored message *looks like* a quiz, which the client does just as
+    loosely, so that an answer key is never left unredacted because a quiz was
+    malformed.
     """
     if not text or not isinstance(text, str):
         return None
@@ -187,6 +192,69 @@ def _try_extract_quiz_json(text: str):
         return {"test": obj}
 
     return None
+
+
+def _valid_correct_index(correct, answers) -> bool:
+    """True if *correct* is an in-range 0-based index into *answers*."""
+    if isinstance(correct, bool) or not isinstance(correct, (str, int)):
+        return False
+    text = str(correct).strip()
+    return bool(re.fullmatch(r"\d+", text)) and int(text) < len(answers)
+
+
+def _is_usable_quiz(quiz_json) -> bool:
+    """A quiz the student can actually be asked and graded on.
+
+    `test` must be a non-empty dict whose questions are dicts with question
+    text. A multiple-choice question (or any question carrying an `answers`
+    list) must have a non-empty list of options and a `correct` that is an
+    in-range 0-based index; otherwise grading would mark every attempt wrong.
+    A question with no `answers` list and not typed multiple-choice (short
+    answer) only needs its text.
+    """
+    test = (quiz_json or {}).get("test")
+    if not isinstance(test, dict) or not test:
+        return False
+    for qdata in test.values():
+        if not isinstance(qdata, dict):
+            return False
+        question = qdata.get("question")
+        if not isinstance(question, str) or not question.strip():
+            return False
+        answers = qdata.get("answers")
+        is_mc = str(qdata.get("type", "")).strip().lower() == "multiple-choice"
+        if is_mc or isinstance(answers, list):
+            if not isinstance(answers, list) or not answers:
+                return False
+            if not _valid_correct_index(qdata.get("correct"), answers):
+                return False
+    return True
+
+
+def _try_extract_quiz_json(text: str):
+    """The quiz in *text* as {"test": {...}}, or None if there is no usable one.
+
+    A reply that parses but is malformed (missing question text, `correct` out
+    of range, empty options) is None, so the caller treats it as unparseable and
+    the existing quiz retry runs instead of persisting something ungradable.
+    """
+    quiz_json = _parse_quiz_json(text)
+    return quiz_json if _is_usable_quiz(quiz_json) else None
+
+
+def _redact_quiz(quiz_json):
+    """A deep copy of *quiz_json* without the answer key.
+
+    The student's browser is handed this until the quiz is graded; the stored
+    quiz and the teacher's view keep `correct`.
+    """
+    redacted = copy.deepcopy(quiz_json)
+    test = redacted.get("test") if isinstance(redacted, dict) else None
+    if isinstance(test, dict):
+        for qdata in test.values():
+            if isinstance(qdata, dict):
+                qdata.pop("correct", None)
+    return redacted
 
 
 def _quiz_questions(quiz_json):
@@ -498,7 +566,10 @@ def api_chat(request):
         # the tutor with nothing to go on when a student asked for direction.
         previous = _last_assistant_message(history)
         waiting_on = ""
-        if not _looks_like_topic_change(msg):
+        # A quiz is not a question the tutor is waiting on: it is answered in
+        # the quiz form, and its JSON would be handed to pending_question as if
+        # it were prose.
+        if not _looks_like_topic_change(msg) and _try_extract_quiz_json(previous) is None:
             from languagemodel import pending_question
 
             waiting_on = pending_question(previous)
@@ -610,6 +681,7 @@ def api_chat(request):
             # rather than the raw reply. Otherwise the student is shown one
             # ordering and graded against another, and the history view
             # disagrees with both.
+            canonical = None
             try:
                 canonical = _maybe_persist_quiz(session, assistant_reply_text)
                 if canonical:
@@ -638,7 +710,18 @@ def api_chat(request):
     except Exception:
         logger.exception("Chat persistence or progress calculation failed")
 
-    payload = {"ok": True, "model_text": assistant_reply_text}
+    # The student must not be handed the answer key before answering. The
+    # canonical quiz (key included) is what was stored; this is what is sent.
+    # Redacting whatever parses as a quiz, rather than only `canonical`, also
+    # covers a reply whose persistence failed and a persistence error after
+    # `canonical` was assigned.
+    response_text = assistant_reply_text
+    if response_text and not error_occurred:
+        quiz_in_reply = _parse_quiz_json(response_text)
+        if quiz_in_reply:
+            response_text = json.dumps(_redact_quiz(quiz_in_reply), ensure_ascii=False)
+
+    payload = {"ok": True, "model_text": response_text}
     if new_session_title:
         payload["session_title"] = new_session_title
     if error_occurred:
@@ -728,10 +811,34 @@ def api_session_messages(request, session_id):
         and not (c.role == "user" and _is_bootstrap_user_message(c.message))
     ]
 
+    quizzes = list(Quiz.objects.filter(session=session).order_by("started_at", "id"))
+    quiz_answers = [quiz.answers.order_by("-submitted_at").first() for quiz in quizzes]
+
+    # The owning student must not see the answer key of a quiz they have not
+    # answered. Staff always see it.
+    hide_unanswered_keys = not is_teacher_or_admin(request.user)
+    if hide_unanswered_keys:
+        # Quizzes are matched to quiz-shaped assistant messages by order, as
+        # loadSessionMessages does in chat.html: the Nth message that parses
+        # as a quiz belongs to the Nth Quiz row (ordered by started_at, id).
+        # A quiz-shaped message with no answered Quiz at its position,
+        # including one past the end of the list, is redacted, so a mismatch
+        # costs the student a highlight and never leaks a key.
+        quiz_position = 0
+        for message in messages:
+            if message["role"] == "user":
+                continue
+            parsed = _parse_quiz_json(message["text"])
+            if not parsed:
+                continue
+            answered = (quiz_position < len(quiz_answers)
+                        and quiz_answers[quiz_position] is not None)
+            quiz_position += 1
+            if not answered:
+                message["text"] = json.dumps(_redact_quiz(parsed), ensure_ascii=False)
+
     quiz_attempts = []
-    quizzes = Quiz.objects.filter(session=session).order_by("started_at", "id")
-    for quiz in quizzes:
-        quiz_answer = quiz.answers.order_by("-submitted_at").first()
+    for quiz, quiz_answer in zip(quizzes, quiz_answers):
         test = (quiz.quiz_json or {}).get("test") or {}
         items = []
         if isinstance(test, dict):
@@ -763,6 +870,9 @@ def api_session_messages(request, session_id):
                     grade_item = graded_json.get(qid)
                     if isinstance(grade_item, dict) and "isCorrect" in grade_item:
                         is_correct = bool(grade_item.get("isCorrect"))
+
+                if hide_unanswered_keys and quiz_answer is None:
+                    correct_display = ""
 
                 items.append({
                     "qid": qid,
@@ -898,12 +1008,26 @@ def api_grade_quiz(request):
     test = (quiz_obj or {}).get("test") or {}
     q_items = list(test.items())
 
-    csv_string = (data.get("answers") or "").strip()
-    if not csv_string:
+    # New clients send {qid: "<1-based option>"}, so a skipped question cannot
+    # shift the answers after it onto the wrong question. A string is the old
+    # positional CSV, kept for clients that have not reloaded.
+    raw_answers = data.get("answers")
+    answers_by_qid = None
+    answers = []
+    if isinstance(raw_answers, dict):
+        if not raw_answers:
+            return HttpResponseBadRequest("answers is required")
+        answers_by_qid = {str(k): v for k, v in raw_answers.items()}
+    elif isinstance(raw_answers, str):
+        csv_string = raw_answers.strip()
+        if not csv_string:
+            return HttpResponseBadRequest("answers is required")
+        answers = parse_csv_answers(csv_string)
+    elif raw_answers is None:
         return HttpResponseBadRequest("answers is required")
-    
-    answers = parse_csv_answers(csv_string)
-    
+    else:
+        return HttpResponseBadRequest("answers must be an object or a string")
+
     total_points = 0.0
     earned_points = 0.0
     graded_feedback = {}  # qid -> message (for frontend modal)
@@ -914,21 +1038,29 @@ def api_grade_quiz(request):
         correct = qdata.get("correct")
         answers_list = qdata.get("answers") or []
 
-        try:
-            possible = float(qdata.get("points", 1))
-        except Exception:
-            possible = 1.0
+        # Every question is worth one point. The model's own `points` is not
+        # read: float() accepts "nan", "inf" and negatives, which poison the
+        # averages built from these totals.
+        possible = 1.0
 
         total_points += possible
-        user_ans = answers[idx] if idx < len(answers) else ""
+        if answers_by_qid is not None:
+            user_ans = answers_by_qid.get(qid)
+            if user_ans is None:
+                user_ans = ""
+        else:
+            user_ans = answers[idx] if idx < len(answers) else ""
 
         # Normalize strings
         user_ans_str = str(user_ans).strip()
         correct_str = str(correct).strip()
 
         is_correct = False
+        if not user_ans_str:
+            # Unanswered is wrong, even for a question with no key to match.
+            is_correct = False
         # If both look numeric, compare user's 1-based to model's 0-based index
-        if re.match(r'^\d+$', user_ans_str) and re.match(r'^\d+$', correct_str):
+        elif re.match(r'^\d+$', user_ans_str) and re.match(r'^\d+$', correct_str):
             try:
                 is_correct = (int(user_ans_str) - 1) == int(correct_str)
             except Exception:
@@ -997,4 +1129,6 @@ def api_grade_quiz(request):
 
     # Return structured JSON (frontend will parse and display it)
     feedback_json = json.dumps(graded_feedback)
-    return JsonResponse({"ok": True, "model_text": feedback_json})
+    # The full quiz, answer key included, now that it has been answered: the
+    # student's view was sent it without `correct` and re-renders from this.
+    return JsonResponse({"ok": True, "model_text": feedback_json, "quiz": test})
