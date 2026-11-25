@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 # Hard upper bound, actual limit is determined by tokenizer.model_max_length
 MAX_CONTEXT_TOKENS = 32768
 
+# What the conversation history may spend on each turn. The whole transcript is
+# sent every turn, and a tokenizer truncates from the right, so a long session
+# used to lose the student's newest message, the curriculum context folded into
+# it and the generation marker - the parts that matter most. This is well under
+# MAX_CONTEXT_TOKENS on purpose: it leaves room for the chat template's own
+# markup and for the reply, and keeps per-turn latency and memory in check.
+HISTORY_TOKEN_BUDGET = 6000
+
 TUTOR_SYSTEM_PROMPT = """
 The assistant is a tutor for a middle school or high school student. The assistant has no name and must not refer to itself by any name.
 
@@ -421,6 +429,76 @@ def effective_max_input_tokens(tokenizer) -> int:
     return min(tmax, MAX_CONTEXT_TOKENS)
 
 
+def trim_history(messages, max_tokens, count_tokens) -> list:
+    """Drop the oldest turns until the transcript fits *max_tokens*.
+
+    *count_tokens* is a callable(str) -> int, so this stays pure and testable
+    without a tokenizer. Always kept: the system message, the bootstrap pair
+    (the first user message and the first assistant reply after the system
+    message, which carry the student's details and the greeting) and the final
+    message, the new student turn. The oldest middle turns go first, a user
+    message together with the assistant reply that follows it so roles keep
+    alternating. If the kept messages alone exceed the budget they are returned
+    as they are: the new turn is never the thing that gets cut.
+
+    Returns a new list; *messages* is not modified.
+    """
+    messages = list(messages)
+    if len(messages) <= 1:
+        return messages
+
+    keep = {len(messages) - 1}
+    start = 0
+    if messages[0].get("role") == "system":
+        keep.add(0)
+        start = 1
+    first_user = next(
+        (i for i in range(start, len(messages)) if messages[i].get("role") == "user"),
+        None,
+    )
+    if first_user is not None:
+        keep.add(first_user)
+        first_assistant = next(
+            (i for i in range(first_user + 1, len(messages))
+             if messages[i].get("role") == "assistant"),
+            None,
+        )
+        if first_assistant is not None:
+            keep.add(first_assistant)
+
+    costs = [count_tokens(m.get("content") or "") for m in messages]
+    total = sum(costs)
+    middle = [i for i in range(len(messages)) if i not in keep]
+
+    dropped = set()
+    position = 0
+    while total > max_tokens and position < len(middle):
+        index = middle[position]
+        group = [index]
+        nxt = middle[position + 1] if position + 1 < len(middle) else None
+        if (messages[index].get("role") == "user" and nxt is not None
+                and messages[nxt].get("role") == "assistant"):
+            group.append(nxt)
+        for i in group:
+            dropped.add(i)
+            total -= costs[i]
+        position += len(group)
+
+    return [m for i, m in enumerate(messages) if i not in dropped]
+
+
+def _token_counter(tokenizer):
+    """A callable(str) -> int over *tokenizer*, resolved only when called.
+
+    Falls back to a rough four-characters-per-token estimate for a tokenizer
+    that cannot encode, so trimming still happens rather than failing the turn.
+    """
+    encode = getattr(tokenizer, "encode", None)
+    if encode is None:
+        return lambda text: len(text) // 4 + 1
+    return lambda text: len(encode(text, add_special_tokens=False))
+
+
 def strip_think_blocks(text: str) -> str:
     """Remove <think>…</think> spans, which Qwen3 emits inline."""
     while "<think>" in text and "</think>" in text:
@@ -578,7 +656,12 @@ class Adapter:
         """Open a session. Returns (assistant_text, messages)."""
         logger.info("Chat started")
 
-        self.load_curriculum()
+        # Retrieval is an aid, not a precondition: a curriculum that fails to
+        # load must not stop a student being tutored.
+        try:
+            self.load_curriculum()
+        except Exception:
+            logger.exception("Curriculum failed to load; continuing without retrieval")
 
         messages = [
             {"role": "system", "content": TUTOR_SYSTEM_PROMPT},
@@ -619,7 +702,13 @@ class Adapter:
         messages.append({"role": "user", "content": new_message})
 
         logger.debug("Retrieving curriculum context")
-        context_text = build_rag_system_message(retrieve(query))
+        try:
+            context_text = build_rag_system_message(retrieve(query))
+        except Exception:
+            # An index that failed to load (or an embedder that cannot start)
+            # would otherwise fail every message; answer without context.
+            logger.exception("Retrieval failed; answering without curriculum context")
+            context_text = ""
 
         # The context is folded into the student's turn rather than appended as
         # a trailing system message. Mistral's chat template accepts a system
@@ -649,6 +738,15 @@ class Adapter:
                 "role": "user",
                 "content": f"{preamble}\n\n{new_message}",
             }
+
+        # Trim only the copy handed to the model, after the context is folded
+        # in so its tokens are counted. `messages` - what the caller persists -
+        # keeps the full history.
+        messages_for_generation = trim_history(
+            messages_for_generation,
+            min(HISTORY_TOKEN_BUDGET, effective_max_input_tokens(tokenizer)),
+            _token_counter(tokenizer),
+        )
 
         logger.debug("Generating reply")
         assistant_text = self._generate(model, tokenizer, messages_for_generation)
