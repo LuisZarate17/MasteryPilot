@@ -384,6 +384,21 @@ def _extract_docx(filepath):
     return [("\n".join(p.text for p in document.paragraphs if p.text.strip()), "", "")]
 
 
+def _json_content(content):
+    """A record's text as one string, or None when it is not text.
+
+    A string is taken as is. A list of strings is a record written as
+    paragraphs, so it is joined with a blank line. Anything else - a number,
+    a nested object, a list holding either - is not curriculum text, and
+    guessing at it would index the wrong thing or fail downstream.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and all(isinstance(part, str) for part in content):
+        return "\n\n".join(content)
+    return None
+
+
 def _extract_json(filepath):
     with open(filepath, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -391,9 +406,19 @@ def _extract_json(filepath):
     items = data if isinstance(data, list) else [data]
     pieces = []
     for item in items:
-        if isinstance(item, dict) and item.get("content"):
-            title = item.get("title", os.path.basename(filepath))
-            pieces.append((item["content"], f"/{title}", ""))
+        if not (isinstance(item, dict) and item.get("content")):
+            continue
+        title = item.get("title", os.path.basename(filepath))
+        text = _json_content(item["content"])
+        if text is None:
+            logger.warning(
+                "Skipping record %r in %s: content is %s, not text",
+                title, filepath, type(item["content"]).__name__,
+            )
+            continue
+        if not text.strip():
+            continue
+        pieces.append((text, f"/{title}", ""))
     return pieces
 
 
@@ -986,9 +1011,33 @@ class RagIndex:
         self.index = None
         self._bm25 = None
 
-        self.load_curriculum_folder(curriculum_path)
-        self._maybe_upgrade_to_ivf()
-        self.save_index(manifest)
+        try:
+            self.load_curriculum_folder(curriculum_path)
+            # load_files skips a file that fails, which is right for one bad
+            # upload. When every supported file fails, though, the cause is
+            # almost never the files (the embedder would not load, say), and
+            # saving that empty index under the current manifest would make it
+            # stick until someone edits a file. Treat it as a failed build so
+            # the next session retries.
+            if not self.documents and any(
+                os.path.splitext(path)[1].lower() in EXTRACTORS for path in manifest
+            ):
+                raise RuntimeError(
+                    "Curriculum files were found but none could be indexed; "
+                    "not saving an empty index"
+                )
+            self._maybe_upgrade_to_ivf()
+            self.save_index(manifest)
+        except Exception:
+            # Per-file failures are absorbed in load_files, so this is the
+            # walk, the IVF upgrade or the write failing. Leave the process
+            # empty rather than half-built, and unmarked, so the next session
+            # retries instead of trusting a corpus that never finished.
+            self.documents = []
+            self.index = None
+            self._bm25 = None
+            self._loaded_manifest = None
+            raise
         self._loaded_manifest = manifest
         logger.info("Curriculum indexed: %s chunks", len(self.documents))
 
@@ -1101,25 +1150,28 @@ class RagIndex:
                 continue
 
             filepath = os.path.join(folder_path, filename)
+            # The whole per-file body sits inside the try, not only the
+            # extractor. A malformed record that survived extraction used to
+            # raise in report_thin_extraction, escape _rebuild after it had
+            # emptied the index, and fail every new session.
             try:
                 pieces = extract(filepath)
+                label = _rel_source(filepath, root)
+                report_thin_extraction(filepath, pieces)
+                # Numbering continues per source label, so a markdown file's
+                # sections stay distinguishable while a JSON file's records —
+                # which each get their own label — each start again at zero.
+                next_idx = {}
+                for text, suffix, prefix in pieces:
+                    if not (text and text.strip()):
+                        continue
+                    source = label + suffix
+                    chunks = chunk_text(text, source, prefix, next_idx.get(source, 0))
+                    next_idx[source] = next_idx.get(source, 0) + len(chunks)
+                    self.add_documents(chunks)
             except Exception as exc:
                 logger.warning("Skipping %s: %s: %s", filepath, type(exc).__name__, exc)
                 continue
-
-            label = _rel_source(filepath, root)
-            report_thin_extraction(filepath, pieces)
-            # Numbering continues per source label, so a markdown file's
-            # sections stay distinguishable while a JSON file's records — which
-            # each get their own label — each start again at zero.
-            next_idx = {}
-            for text, suffix, prefix in pieces:
-                if not (text and text.strip()):
-                    continue
-                source = label + suffix
-                chunks = chunk_text(text, source, prefix, next_idx.get(source, 0))
-                next_idx[source] = next_idx.get(source, 0) + len(chunks)
-                self.add_documents(chunks)
 
     def load_txt_files(self, folder_path, curriculum_root=None):
         self.load_files(folder_path, curriculum_root, extensions={".txt"})

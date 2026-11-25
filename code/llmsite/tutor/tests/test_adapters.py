@@ -32,6 +32,7 @@ from languagemodel import (
     get_adapter,
     introduction_prompt,
     strip_think_blocks,
+    trim_history,
 )
 
 
@@ -761,3 +762,177 @@ class RetrievalQueryWiringTests(SimpleTestCase):
         self.send(messages, "why?")
 
         self.assertEqual(messages[5], {"role": "user", "content": "why?"})
+
+
+class StartChatCurriculumFailureTests(SimpleTestCase):
+    """A curriculum that cannot load must not stop a student being tutored."""
+
+    def test_start_chat_still_greets_when_the_curriculum_fails_to_load(self):
+        adapter = get_adapter("qwen")
+
+        with mock.patch.object(adapter, "load_curriculum", side_effect=AttributeError("bad")), \
+                mock.patch.object(adapter, "_generate", return_value="Hello!"), \
+                self.assertLogs("languagemodel", level="ERROR") as logged:
+            text, messages = adapter.start_chat(object(), object(), "Ada", "WSU", "11", "Math")
+
+        self.assertEqual(text, "Hello!")
+        self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant"])
+        self.assertIn("continuing without retrieval", " ".join(logged.output))
+
+    def test_send_message_answers_when_retrieval_raises(self):
+        adapter = get_adapter("qwen")
+        messages = [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "B"},
+            {"role": "assistant", "content": "H"},
+        ]
+
+        with mock.patch.object(adapter, "_generate", return_value="reply") as generate, \
+                mock.patch("rag.retrieve", side_effect=RuntimeError("no index")), \
+                self.assertLogs("languagemodel", level="ERROR"):
+            text, returned = adapter.send_message(object(), object(), messages, "hi")
+
+        self.assertEqual(text, "reply")
+        self.assertEqual(generate.call_args.args[2][-1],
+                         {"role": "user", "content": "hi"})
+        self.assertEqual(returned[-1], {"role": "assistant", "content": "reply"})
+
+
+def words(text):
+    """One token per word, so budgets in tests are easy to read."""
+    return len(text.split())
+
+
+class TrimHistoryTests(SimpleTestCase):
+    """trim_history drops the oldest middle turns and never the newest."""
+
+    def transcript(self, pairs):
+        """system, bootstrap pair, *pairs* of one-word turns, then the new turn."""
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "boot"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        for n in range(pairs):
+            messages.append({"role": "user", "content": f"q{n}"})
+            messages.append({"role": "assistant", "content": f"a{n}"})
+        messages.append({"role": "user", "content": "final"})
+        return messages
+
+    def contents(self, messages):
+        return [m["content"] for m in messages]
+
+    def test_a_transcript_that_fits_is_returned_whole(self):
+        messages = self.transcript(2)
+
+        self.assertEqual(trim_history(messages, 100, words), messages)
+
+    def test_the_oldest_pairs_go_first(self):
+        messages = self.transcript(3)   # 3 + 6 + 1 = 10 words
+
+        trimmed = trim_history(messages, 8, words)
+
+        self.assertEqual(
+            self.contents(trimmed),
+            ["sys", "boot", "hello", "q1", "a1", "q2", "a2", "final"],
+        )
+
+    def test_system_bootstrap_and_final_turn_survive_heavy_trimming(self):
+        trimmed = trim_history(self.transcript(5), 4, words)
+
+        self.assertEqual(self.contents(trimmed), ["sys", "boot", "hello", "final"])
+
+    def test_the_result_fits_the_budget_when_it_can(self):
+        trimmed = trim_history(self.transcript(10), 9, words)
+
+        self.assertLessEqual(sum(words(m["content"]) for m in trimmed), 9)
+
+    def test_roles_keep_alternating_after_the_bootstrap(self):
+        trimmed = trim_history(self.transcript(6), 9, words)
+
+        roles = [m["role"] for m in trimmed[1:]]
+        self.assertEqual(roles, ["user", "assistant"] * ((len(roles) - 1) // 2) + ["user"])
+
+    def test_the_final_turn_survives_when_the_kept_messages_alone_are_too_big(self):
+        messages = self.transcript(2)
+        messages[-1]["content"] = "one two three four five six"
+
+        trimmed = trim_history(messages, 2, words)
+
+        self.assertEqual(self.contents(trimmed),
+                         ["sys", "boot", "hello", "one two three four five six"])
+
+    def test_the_input_list_is_not_mutated(self):
+        messages = self.transcript(4)
+        snapshot = [dict(m) for m in messages]
+
+        trimmed = trim_history(messages, 4, words)
+
+        self.assertEqual(messages, snapshot)
+        self.assertIsNot(trimmed, messages)
+
+    def test_a_transcript_without_a_system_message_keeps_its_first_pair(self):
+        messages = [
+            {"role": "user", "content": "boot"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "q0"},
+            {"role": "assistant", "content": "a0"},
+            {"role": "user", "content": "final"},
+        ]
+
+        trimmed = trim_history(messages, 3, words)
+
+        self.assertEqual(self.contents(trimmed), ["boot", "hello", "final"])
+
+
+class SendMessageTrimmingTests(SimpleTestCase):
+    """Only what goes to the model is trimmed; the caller keeps everything."""
+
+    def history(self, pairs):
+        messages = [
+            {"role": "system", "content": "SYSTEM"},
+            {"role": "user", "content": "BOOTSTRAP"},
+            {"role": "assistant", "content": "Hello!"},
+        ]
+        for n in range(pairs):
+            messages.append({"role": "user", "content": f"question {n} " + "word " * 50})
+            messages.append({"role": "assistant", "content": f"answer {n} " + "word " * 50})
+        return messages
+
+    def test_the_model_gets_a_trimmed_history_and_the_caller_gets_all_of_it(self):
+        adapter = get_adapter("qwen")
+        messages = self.history(20)
+        before = [dict(m) for m in messages]
+        seen = {}
+
+        def fake_generate(model, tokenizer, msgs, **kwargs):
+            seen["messages"] = msgs
+            return "reply"
+
+        tokenizer = SimpleNamespace(
+            encode=lambda text, add_special_tokens=True: text.split(),
+            model_max_length=1_000_000,
+        )
+        with mock.patch.object(languagemodel, "HISTORY_TOKEN_BUDGET", 300), \
+                mock.patch.object(adapter, "_generate", side_effect=fake_generate), \
+                mock.patch("rag.retrieve", return_value=[]), \
+                mock.patch("rag.build_rag_system_message", return_value=""):
+            text, returned = adapter.send_message(object(), tokenizer, messages, "newest?")
+
+        sent = seen["messages"]
+        # Against the history as it was plus the new turn, not `messages`, which
+        # send_message has since appended to and so would always be longer.
+        self.assertLess(len(sent), len(before) + 1)
+        self.assertLessEqual(sum(len(m["content"].split()) for m in sent), 300)
+        self.assertEqual(sent[0]["role"], "system")
+        self.assertEqual(sent[1]["content"], "BOOTSTRAP")
+        self.assertEqual(sent[-1], {"role": "user", "content": "newest?"})
+
+        # The caller's list holds every turn, untouched, plus the new pair.
+        self.assertIs(returned, messages)
+        self.assertEqual(returned[:len(before)], before)
+        self.assertEqual(returned[-2:], [
+            {"role": "user", "content": "newest?"},
+            {"role": "assistant", "content": "reply"},
+        ])
+        self.assertEqual(len(returned), len(before) + 2)

@@ -1123,10 +1123,20 @@ class EnsureCurriculumLoadedTests(RagTestCase):
 
     def _patch(self, name):
         """Patch on the instance: these are methods, so ensure_curriculum_loaded
-        reaches them through self, not through the module namespace."""
-        setattr(
-            rag.default_index, name, lambda *a, _n=name, **k: self.calls.append(_n)
-        )
+        reaches them through self, not through the module namespace.
+
+        The fake loader also indexes one chunk, as a real load of a corpus with
+        a file in it would; _rebuild refuses to save when files exist but
+        nothing was indexed.
+        """
+        def fake(*a, _n=name, **k):
+            self.calls.append(_n)
+            if _n == "load_curriculum_folder":
+                rag.default_index.documents.append(
+                    {"text": "indexed", "source": "new.txt", "chunk_idx": 0}
+                )
+
+        setattr(rag.default_index, name, fake)
 
     def test_a_repeat_call_on_an_unchanged_corpus_does_no_work(self):
         """Replaces a test that asserted a latch which never cleared.
@@ -1668,3 +1678,170 @@ class PruneToBestTests(RagTestCase):
         scored = [("a", -0.1), ("b", -0.5)]
 
         self.assertEqual(rag.prune_to_best(scored, ratio=0.6), scored)
+
+
+class JsonContentTests(RagTestCase):
+    """A JSON record's content must be text, or the record is skipped.
+
+    A list or number used to pass extraction and then raise in
+    report_thin_extraction, which escaped the rebuild and failed every new
+    session.
+    """
+
+    def extract(self, payload):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "unit.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            return rag._extract_json(path)
+
+    def test_string_content_is_unchanged(self):
+        pieces = self.extract({"title": "Unit 1", "content": "para one"})
+
+        self.assertEqual(pieces, [("para one", "/Unit 1", "")])
+
+    def test_a_list_of_strings_is_joined_into_one_piece(self):
+        pieces = self.extract({"title": "Unit 1", "content": ["para one", "para two"]})
+
+        self.assertEqual(pieces, [("para one\n\npara two", "/Unit 1", "")])
+
+    def test_a_number_is_skipped_and_logged(self):
+        with self.assertLogs("rag", level="WARNING") as logged:
+            pieces = self.extract({"title": "Unit 1", "content": 42})
+
+        self.assertEqual(pieces, [])
+        self.assertIn("Unit 1", " ".join(logged.output))
+
+    def test_a_list_holding_a_non_string_is_skipped(self):
+        with self.assertLogs("rag", level="WARNING"):
+            pieces = self.extract({"title": "Unit 1", "content": ["ok", 3]})
+
+        self.assertEqual(pieces, [])
+
+    def test_a_bad_record_does_not_hide_a_good_one(self):
+        with self.assertLogs("rag", level="WARNING"):
+            pieces = self.extract([
+                {"title": "Bad", "content": 42},
+                {"title": "Good", "content": "text"},
+            ])
+
+        self.assertEqual(pieces, [("text", "/Good", "")])
+
+    def test_whitespace_only_content_is_skipped(self):
+        self.assertEqual(self.extract({"title": "T", "content": ["  ", "\n"]}), [])
+        self.assertEqual(self.extract({"title": "T", "content": "   "}), [])
+
+
+class OneBadFileTests(RagTestCase):
+    """One file's failure is logged and skipped; the rest of the folder indexes."""
+
+    def setUp(self):
+        super().setUp()
+        self.added = []
+        rag.default_index.add_documents = self.added.extend
+
+    def write(self, folder, name, text):
+        with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def test_a_json_file_with_numeric_content_does_not_stop_the_good_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "a_bad.json", '{"title": "Bad", "content": 42}')
+            self.write(tmp, "b_good.txt", "Fractions divide a whole.")
+
+            with self.assertLogs("rag", level="WARNING"):
+                rag.default_index.load_files(tmp)
+
+        self.assertEqual(len(self.added), 1)
+        self.assertTrue(self.added[0]["source"].endswith("b_good.txt"))
+
+    def test_a_failure_after_extraction_is_logged_and_skipped(self):
+        real = rag.report_thin_extraction
+
+        def explode_for_bad(filepath, pieces, *args, **kwargs):
+            if os.path.basename(filepath) == "a_bad.txt":
+                raise AttributeError("boom")
+            return real(filepath, pieces, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "a_bad.txt", "This one raises.")
+            self.write(tmp, "b_good.txt", "Fractions divide a whole.")
+
+            with mock.patch.object(rag, "report_thin_extraction",
+                                   side_effect=explode_for_bad), \
+                    self.assertLogs("rag", level="WARNING") as logged:
+                rag.default_index.load_files(tmp)
+
+        message = " ".join(logged.output)
+        self.assertIn("a_bad.txt", message)
+        self.assertIn("AttributeError", message)
+        self.assertIn("boom", message)
+        self.assertEqual(len(self.added), 1)
+        self.assertTrue(self.added[0]["source"].endswith("b_good.txt"))
+
+    def test_a_failure_while_adding_one_file_leaves_the_others_indexed(self):
+        def add(chunks):
+            if chunks[0]["source"].endswith("a_bad.txt"):
+                raise RuntimeError("embedder failed")
+            self.added.extend(chunks)
+
+        rag.default_index.add_documents = add
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "a_bad.txt", "This one raises.")
+            self.write(tmp, "b_good.txt", "Fractions divide a whole.")
+
+            with self.assertLogs("rag", level="WARNING"):
+                rag.default_index.load_files(tmp)
+
+        self.assertEqual(len(self.added), 1)
+
+    def test_when_every_file_fails_the_empty_index_is_not_saved(self):
+        """A total failure (the embedder will not load) must be retried, not persisted."""
+        index = rag.default_index
+
+        def add(chunks):
+            raise RuntimeError("embedder failed")
+
+        index.add_documents = add
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "a.txt", "Fractions divide a whole.")
+            self.write(tmp, "b.txt", "A numerator sits on top.")
+            with mock.patch.object(index, "save_index") as save, \
+                    self.assertLogs("rag", level="WARNING"):
+                with self.assertRaises(RuntimeError):
+                    index._rebuild(tmp)
+
+        save.assert_not_called()
+        self.assertIsNone(index._loaded_manifest)
+        self.assertEqual(index.documents, [])
+
+    def test_a_folder_with_no_supported_files_still_saves_an_empty_index(self):
+        index = rag.default_index
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "notes.unsupported", "Not a curriculum file.")
+            with mock.patch.object(index, "save_index") as save:
+                index._rebuild(tmp)
+
+        save.assert_called_once()
+        self.assertEqual(index.documents, [])
+
+    def test_a_failed_rebuild_leaves_the_index_empty_and_unmarked(self):
+        index = rag.default_index
+        index.documents = [{"text": "stale", "source": "old.txt"}]
+        index.index = object()
+        # Index for real, so the failure under test is the save, not an empty load.
+        index.add_documents = lambda chunks: index.documents.extend(chunks)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write(tmp, "a.txt", "Fractions divide a whole.")
+            with mock.patch.object(index, "save_index", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    index._rebuild(tmp)
+
+        self.assertEqual(index.documents, [])
+        self.assertIsNone(index.index)
+        self.assertIsNone(index._loaded_manifest)
+        self.assertEqual(index.retrieve("fractions"), [])
