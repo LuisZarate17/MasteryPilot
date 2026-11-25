@@ -17,6 +17,8 @@ class ExportChatTests(MasteryPilotTestCase):
         self.student_profile = self.student_user.studentprofile
 
         self.session = self.make_session(self.student_user, title="Algebra practice")
+        self.make_chat(self.session, "user", "Here is your student information: Ada")
+        self.make_chat(self.session, "assistant", "Hello, Ada.")
         self.make_chat(self.session, "user", "How do I solve x + 3 = 8?")
         self.make_chat(self.session, "assistant", "Subtract 3 from both sides.")
 
@@ -44,7 +46,7 @@ class ExportChatTests(MasteryPilotTestCase):
         self.assertEqual(payload["student"]["username"], "student_export")
         self.assertEqual(len(payload["sessions"]), 1)
         self.assertEqual(payload["sessions"][0]["title"], "Algebra practice")
-        self.assertEqual(len(payload["sessions"][0]["messages"]), 2)
+        self.assertEqual(len(payload["sessions"][0]["messages"]), 3)
 
     def test_unassigned_teacher_cannot_export_student_chats(self):
         other_teacher_user = self.make_teacher("teacher_other")
