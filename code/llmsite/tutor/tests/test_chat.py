@@ -229,15 +229,14 @@ class NewSessionTests(MasteryPilotTestCase):
 
         self.assertEqual(response.status_code, 200)
 
-    def test_an_unavailable_model_still_creates_the_session(self):
-        """Degrades rather than 500s — the session row is the useful part."""
+    def test_an_unavailable_model_creates_no_session(self):
+        """A session with no system prompt would run the model unconstrained."""
         with UnloadedModel():
             response = self.post(title="Offline")
 
-        self.assertEqual(response.status_code, 200)
-        payload = json.loads(response.content)
-        self.assertIn("Model unavailable", payload["model_text"])
-        self.assertTrue(Session.objects.filter(owner=self.student).exists())
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(json.loads(response.content)["ok"])
+        self.assertFalse(Session.objects.filter(owner=self.student).exists())
 
     def test_a_start_chat_failure_is_reported_not_raised(self):
         adapter = FakeAdapter()
@@ -246,8 +245,9 @@ class NewSessionTests(MasteryPilotTestCase):
         with LoadedModel(adapter):
             response = self.post()
 
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Model error", json.loads(response.content)["model_text"])
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(Session.objects.filter(owner=self.student).exists())
+        self.assertNotIn("boom", response.content.decode())
 
     def test_a_malformed_body_is_rejected(self):
         response = self.client.post(
@@ -263,6 +263,7 @@ class ChatTests(MasteryPilotTestCase):
         self.client.force_login(self.student)
         self.session = self.make_session(self.student)
         self.set_active_session(self.session)
+        self.bootstrap_session(self.session)
 
     def send(self, message):
         return self.client.post(
@@ -282,7 +283,7 @@ class ChatTests(MasteryPilotTestCase):
             .values_list("role", "message")
         )
         self.assertEqual(
-            messages,
+            messages[3:],  # after the three bootstrap rows
             [("user", "How do I solve x + 3 = 8?"), ("assistant", "Subtract three.")],
         )
 
@@ -462,8 +463,12 @@ class ChatTests(MasteryPilotTestCase):
         payload = json.loads(response.content)
         self.assertTrue(payload["error"])
         self.assertIn("Model unavailable", payload["model_text"])
-        roles = list(DBChat.objects.filter(session=self.session).values_list("role", flat=True))
-        self.assertEqual(roles, ["user"])
+        roles = list(
+            DBChat.objects.filter(session=self.session)
+            .order_by("created_at", "id")
+            .values_list("role", flat=True)
+        )
+        self.assertEqual(roles[3:], ["user"])  # after the three bootstrap rows
 
     def test_a_quiz_reply_is_captured_as_an_active_quiz(self):
         quiz = '{"test": {"q1": {"question": "2+2?", "answers": ["4"], "correct": "0"}}}'
@@ -616,6 +621,7 @@ class RepeatedQuizRegenerationTests(MasteryPilotTestCase):
         self.client.force_login(self.student)
         self.session = self.make_session(self.student)
         self.set_active_session(self.session)
+        self.bootstrap_session(self.session)
 
     def send(self, message="quiz me"):
         return self.client.post(

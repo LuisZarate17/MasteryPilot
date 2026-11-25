@@ -100,6 +100,17 @@ class MasteryPilotTestCase(TestCase):
     def make_chat(session, role, message):
         return Chat.objects.create(session=session, role=role, message=message)
 
+    @classmethod
+    def bootstrap_session(cls, session):
+        """Persist the rows start_chat writes: system prompt, bootstrap turn, greeting.
+
+        api_chat refuses a session without a leading system row, so any test
+        that chats needs a history shaped like a real one.
+        """
+        cls.make_chat(session, "system", "SYSTEM PROMPT")
+        cls.make_chat(session, "user", "Here is your student information ...")
+        cls.make_chat(session, "assistant", "Hello!")
+
     @staticmethod
     def make_quiz(session, test, status="active"):
         """Create a Quiz. *test* is the inner dict, i.e. {"q1": {...}}."""
@@ -172,6 +183,10 @@ class FakeAdapter:
 
     def send_message(self, model, tokenizer, messages, new_message, ledger=None,
                      waiting_on=None):
+        # The tutor's rules are the first row of every real conversation; a code
+        # path that reaches the model without them is a bug.
+        if not messages or messages[0].get("role") != "system":
+            raise AssertionError("send_message called without a leading system prompt")
         self.send_message_calls.append(new_message)
         # What the view handed over as conversation state. Recorded rather than
         # ignored so a test can assert both reach the adapter.

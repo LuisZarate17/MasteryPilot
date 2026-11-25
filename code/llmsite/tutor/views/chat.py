@@ -10,6 +10,7 @@ import json
 import logging
 import random
 import re
+import uuid
 
 from ..models import Chat as DBChat, Quiz, QuizAnswer, Session
 from ..models import StudentProfile, TeacherProfile
@@ -121,15 +122,27 @@ def _current_session(request):
         return None
 
 
-def _load_messages_from_db(request):
-    """Reconstruct the LLM messages list from DB for the current session."""
-    session_id = request.session.get("session_id")
-    if not session_id:
-        return None
-    try:
-        session = Session.objects.get(id=session_id, owner=request.user)
-    except Session.DoesNotExist:
-        return None
+def _resolve_session(request, data):
+    """The Session a request is about, or None.
+
+    The body's session_id wins: the cookie pointer is moved by whichever tab
+    last selected a session, so it cannot say which session *this* tab is
+    typing into. A body id that is malformed, missing or not the caller's
+    resolves to None rather than falling back to the cookie, which would put
+    the message in a session the student was not looking at. Only a body with
+    no session_id (older clients) uses the cookie pointer.
+    """
+    if isinstance(data, dict) and "session_id" in data:
+        try:
+            session_id = uuid.UUID(str(data["session_id"]))
+        except ValueError:
+            return None
+        return Session.objects.filter(id=session_id, owner=request.user).first()
+    return _current_session(request)
+
+
+def _load_messages_from_db(session):
+    """Reconstruct the LLM messages list from DB for *session*."""
     chats = DBChat.objects.filter(session=session).order_by("created_at", "id")
     return [{"role": c.role, "content": c.message} for c in chats]
 
@@ -392,26 +405,28 @@ def api_new_session(request):
     if len(title) > MAX_TITLE_LENGTH:
         return HttpResponseBadRequest(f"title must be at most {MAX_TITLE_LENGTH} characters")
 
-    # Create DB session (we keep the session record)
-    session = Session.objects.create(owner=request.user, title=title)
-    request.session['session_id'] = str(session.id)
-
     name, school, grade, classes = _student_context(request.user)
 
     ensure_llm_initialized()
 
-    messages = []
+    # The session row is created only once the tutor's rules exist to put in
+    # it: a session with no system prompt would run the model unconstrained.
+    unavailable = JsonResponse(
+        {"ok": False, "error": "The tutor is unavailable right now. Please try again in a moment."},
+        status=503,
+    )
     if model is None or tokenizer is None:
-        assistant_msg = "Model unavailable. Please try again later."
-    else:
-        try:
-            assistant_msg, messages = _adapter().start_chat(
-                model, tokenizer, name, school, grade, classes
-            )
-        except Exception:
-            logger.exception("start_chat failed")
-            messages = []
-            assistant_msg = "Model error. Please try again later."
+        return unavailable
+    try:
+        assistant_msg, messages = _adapter().start_chat(
+            model, tokenizer, name, school, grade, classes
+        )
+    except Exception:
+        logger.exception("start_chat failed")
+        return unavailable
+
+    session = Session.objects.create(owner=request.user, title=title)
+    request.session['session_id'] = str(session.id)
 
     # persist messages to DB
     for m in messages:
@@ -420,7 +435,6 @@ def api_new_session(request):
         if content:
             DBChat.objects.create(session=session, role=role, message=content)
 
-    # Return assistant_msg (whether real or generic fallback)
     try:
         calculate_student_progress(request.user)
     except Exception:
@@ -447,27 +461,24 @@ def api_chat(request):
     if not msg:
         return HttpResponseBadRequest("message is required")
 
-    chat = _load_messages_from_db(request)
-    if chat is None:
+    active_session = _resolve_session(request, data)
+    if active_session is None:
         return HttpResponseBadRequest("No active chat, initialize first")
+
+    chat = _load_messages_from_db(active_session)
+    if not chat or chat[0]["role"] != "system":
+        # Without the tutor's rules the model would answer unconstrained.
+        return JsonResponse({"ok": False, "error": "Session not initialised"}, status=409)
 
     # The steps already taught, so the tutor is told where it is rather than
     # having to infer it from the transcript. Read before generation, written
-    # back after it, and absent for a session that has none yet.
-    active_session = None
-    ledger = []
-    session_id = request.session.get("session_id")
-    if session_id:
-        active_session = Session.objects.filter(
-            id=session_id, owner=request.user
-        ).first()
-        if active_session:
-            ledger = active_session.progress_ledger or []
-            if ledger and _looks_like_topic_change(msg):
-                logger.info("Student changed problem - clearing the progress ledger")
-                ledger = []
-                active_session.progress_ledger = []
-                active_session.save(update_fields=["progress_ledger"])
+    # back after it.
+    ledger = active_session.progress_ledger or []
+    if ledger and _looks_like_topic_change(msg):
+        logger.info("Student changed problem - clearing the progress ledger")
+        ledger = []
+        active_session.progress_ledger = []
+        active_session.save(update_fields=["progress_ledger"])
 
     ensure_llm_initialized()
 
@@ -536,7 +547,7 @@ def api_chat(request):
             # worst case stays one extra generation as before.
             if _looks_like_quiz_request(msg):
                 parsed = _try_extract_quiz_json(assistant_reply_text)
-                quiz_session = _current_session(request)
+                quiz_session = active_session
 
                 if parsed is None:
                     reason, nudge = "did not produce JSON", msg
@@ -571,61 +582,59 @@ def api_chat(request):
     # Persist to DB: only persist user + assistant when there was no model error.
     new_session_title = None
     try:
-        session_id = request.session.get("session_id")
-        if session_id:
-            session = Session.objects.get(id=session_id, owner=request.user)
+        session = active_session
 
-            # Auto-title from the first user message if title is still the
-            # default. Ask the LLM for a 1-3 word topic; if it returns empty
-            # (gibberish / no clear topic) leave the title alone.
-            #
-            # "First" means the first message the student actually typed. The
-            # bootstrap turn start_chat persists is also role="user", so a bare
-            # .exists() check here was true on every request and auto-titling
-            # never ran.
-            if session.title in ("", "New session") and not _has_student_message(session):
+        # Auto-title from the first user message if title is still the
+        # default. Ask the LLM for a 1-3 word topic; if it returns empty
+        # (gibberish / no clear topic) leave the title alone.
+        #
+        # "First" means the first message the student actually typed. The
+        # bootstrap turn start_chat persists is also role="user", so a bare
+        # .exists() check here was true on every request and auto-titling
+        # never ran.
+        if session.title in ("", "New session") and not _has_student_message(session):
+            try:
+                derived = _derive_session_title(msg)
+            except Exception:
+                logger.exception("Auto-titling failed")
+                derived = ""
+            if derived:
+                session.title = derived[:MAX_TITLE_LENGTH]
+                session.save(update_fields=["title"])
+                new_session_title = session.title
+
+        DBChat.objects.create(session=session, role="user", message=msg)
+        if not error_occurred and assistant_reply_text:
+            # Persist the quiz first: it shuffles the options, so the text
+            # stored as the assistant's message has to be the stored quiz
+            # rather than the raw reply. Otherwise the student is shown one
+            # ordering and graded against another, and the history view
+            # disagrees with both.
+            try:
+                canonical = _maybe_persist_quiz(session, assistant_reply_text)
+                if canonical:
+                    assistant_reply_text = canonical
+            except Exception:
+                logger.exception("Quiz persistence failed")
+            DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
+
+            # Record the step just taught, unless the reply was a quiz —
+            # a quiz is not a step in a problem, and its JSON would fill
+            # the ledger with noise the next turn has to read past.
+            if not canonical:
                 try:
-                    derived = _derive_session_title(msg)
+                    from languagemodel import extend_ledger
+
+                    session.progress_ledger = extend_ledger(
+                        session.progress_ledger, assistant_reply_text
+                    )
+                    session.save(update_fields=["progress_ledger"])
                 except Exception:
-                    logger.exception("Auto-titling failed")
-                    derived = ""
-                if derived:
-                    session.title = derived[:MAX_TITLE_LENGTH]
-                    session.save(update_fields=["title"])
-                    new_session_title = session.title
+                    logger.exception("Ledger update failed")
 
-            DBChat.objects.create(session=session, role="user", message=msg)
-            if not error_occurred and assistant_reply_text:
-                # Persist the quiz first: it shuffles the options, so the text
-                # stored as the assistant's message has to be the stored quiz
-                # rather than the raw reply. Otherwise the student is shown one
-                # ordering and graded against another, and the history view
-                # disagrees with both.
-                try:
-                    canonical = _maybe_persist_quiz(session, assistant_reply_text)
-                    if canonical:
-                        assistant_reply_text = canonical
-                except Exception:
-                    logger.exception("Quiz persistence failed")
-                DBChat.objects.create(session=session, role="assistant", message=assistant_reply_text)
-
-                # Record the step just taught, unless the reply was a quiz —
-                # a quiz is not a step in a problem, and its JSON would fill
-                # the ledger with noise the next turn has to read past.
-                if not canonical:
-                    try:
-                        from languagemodel import extend_ledger
-
-                        session.progress_ledger = extend_ledger(
-                            session.progress_ledger, assistant_reply_text
-                        )
-                        session.save(update_fields=["progress_ledger"])
-                    except Exception:
-                        logger.exception("Ledger update failed")
-
-            user_message_count = DBChat.objects.filter(session=session, role="user").count()
-            if user_message_count % 5 == 0:
-                calculate_student_progress(request.user)
+        user_message_count = DBChat.objects.filter(session=session, role="user").count()
+        if user_message_count % 5 == 0:
+            calculate_student_progress(request.user)
     except Exception:
         logger.exception("Chat persistence or progress calculation failed")
 
@@ -788,6 +797,10 @@ def api_session_init(request, session_id):
     except Session.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Session not found"}, status=404)
 
+    # A second system prompt appended mid-history would contradict the first.
+    if DBChat.objects.filter(session=session).exists():
+        return JsonResponse({"ok": False, "error": "Session already initialised"}, status=409)
+
     # Same persona source as api_new_session. This used to hard-code a school,
     # grade and class list, so a session bootstrapped through this path told the
     # tutor things about the student that were simply untrue.
@@ -801,8 +814,11 @@ def api_session_init(request, session_id):
         assistant_msg, messages = _adapter().start_chat(
             model, tokenizer, name, school, grade, classes
         )
-    except Exception as e:
-        return JsonResponse({"ok": False, "error": f"LLM init error: {e}"}, status=500)
+    except Exception:
+        logger.exception("start_chat failed")
+        return JsonResponse(
+            {"ok": False, "error": "The tutor could not start this session."}, status=500
+        )
 
     for msg in messages:
         role = msg.get("role")
@@ -861,16 +877,16 @@ def api_select_session(request, session_id):
 @require_http_methods(["POST"])
 @login_required
 def api_grade_quiz(request):
-    session_id = request.session.get("session_id")
-    if not session_id:
-        return HttpResponseBadRequest("No active session")
-
     try:
-        session = Session.objects.get(id=session_id, owner=request.user)
-    except Session.DoesNotExist:
+        data = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+
+    session = _resolve_session(request, data)
+    if session is None:
         return HttpResponseBadRequest("Session not found")
-    
-    quiz = Quiz.objects.filter(session=session, status="active").order_by("-started_at").first()
+
+    quiz =Quiz.objects.filter(session=session, status="active").order_by("-started_at").first()
     if quiz is None:
         return JsonResponse({
             "ok": True,
@@ -881,11 +897,6 @@ def api_grade_quiz(request):
     quiz_obj = quiz.quiz_json
     test = (quiz_obj or {}).get("test") or {}
     q_items = list(test.items())
-
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-    except Exception:
-        return HttpResponseBadRequest("Invalid JSON")
 
     csv_string = (data.get("answers") or "").strip()
     if not csv_string:
