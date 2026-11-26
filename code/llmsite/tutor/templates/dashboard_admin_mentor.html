@@ -101,7 +101,7 @@
                         class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 chat-history-btn"
                         data-role="student"
                         data-student-id="{{ s.user.id }}"
-                        data-classes="{{ s.classes|default_if_none:''|escapejs }}"
+                        data-classes="{{ s.classes|default_if_none:'' }}"
                         data-teacher-id="{{ s.teacher.id|default:'' }}">
                         Chat History
                       </button>
@@ -139,13 +139,13 @@
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100">
-              {% for s, i in intervention_list %}
+              {% for s, i, n in intervention_list %}
                 <tr>
                   <td class="px-4 py-2">
                     {{ s.display_name|default:s.user.get_full_name|default:s.user.username }}
                   </td>
                   <td class="px-4 py-2 text-center text-gray-600">
-                    {% if i == 0 %} Struggling {% elif i == 1 %} Failing {% endif %}
+                    {% if i == 0 %} Struggling {% elif i == 1 %} Failing {% endif %} · {{ n }} question{{ n|pluralize }}
                   </td>
                   <td class="px-4 py-2 text-right space-x-2">
                     <button
@@ -153,7 +153,7 @@
                       class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 chat-history-btn"
                       data-role="student"
                       data-student-id="{{ s.user.id }}"
-                      data-classes="{{ s.classes|default_if_none:''|escapejs }}"
+                      data-classes="{{ s.classes|default_if_none:'' }}"
                       data-teacher-id="{{ s.teacher.id|default:'' }}">
                       Chat History
                     </button>
@@ -409,7 +409,7 @@
                         class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 edit-password-btn"
                         data-role="teacher"
                         data-user-id="{{ t.user.id }}"
-                        data-display-name="{{ t.display_name|default:t.user.get_full_name|default:t.user.username|escapejs }}">
+                        data-display-name="{{ t.display_name|default:t.user.get_full_name|default:t.user.username }}">
                         Edit Password
                       </button>
                       <button
@@ -472,7 +472,7 @@
                         class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 edit-password-btn"
                         data-role="teacher"
                         data-user-id="{{ a.user.id }}"
-                        data-display-name="{{ a.display_name|default:a.user.get_full_name|default:a.user.username|escapejs }}">
+                        data-display-name="{{ a.display_name|default:a.user.get_full_name|default:a.user.username }}">
                         Edit Password
                       </button>
                       <button
@@ -539,7 +539,7 @@
                         class="inline-flex items-center rounded-lg border px-3 py-1 text-xs font-semibold hover:bg-gray-50 edit-student-btn"
                         data-role="student"
                         data-student-id="{{ s.id }}"
-                        data-classes="{{ s.classes|default_if_none:''|escapejs }}"
+                        data-classes="{{ s.classes|default_if_none:'' }}"
                         data-teacher-id="{{ s.teacher.id|default:'' }}">
                         Edit
                       </button>

@@ -55,15 +55,16 @@ class ProgressCalculationTests(MasteryPilotTestCase):
 
         metrics = calculate_student_progress(self.student)
 
-        # One session also exists (quizzes hang off one), worth 1/10 * 30 = 3.
-        self.assertAlmostEqual(metrics["overall_completion_percent"], 73.0, places=4)
+        # The session the quiz hangs off has no student message, so it earns
+        # no session credit: the quiz alone is the full 70.
+        self.assertAlmostEqual(metrics["overall_completion_percent"], 70.0, places=4)
 
     def test_a_half_correct_quiz_contributes_half_the_weight(self):
         self.graded_quiz(earned=5, possible=10)
 
         metrics = calculate_student_progress(self.student)
 
-        self.assertAlmostEqual(metrics["overall_completion_percent"], 35.0 + 3.0, places=4)
+        self.assertAlmostEqual(metrics["overall_completion_percent"], 35.0, places=4)
 
     def test_quiz_average_is_returned_as_a_percentage(self):
         self.graded_quiz(earned=3, possible=4)
@@ -99,9 +100,16 @@ class ProgressCalculationTests(MasteryPilotTestCase):
         self.assertEqual(metrics["total_quizzes"], 0)
         self.assertIsNone(metrics["quiz_average"])
 
+    def talked_session(self, title):
+        """A session in which the student typed something, as completion needs."""
+        session = self.make_session(self.student, title=title)
+        self.bootstrap_session(session)
+        self.make_chat(session, "user", "a real question")
+        return session
+
     def test_the_session_component_caps_at_ten_sessions(self):
         for i in range(15):
-            self.make_session(self.student, title=f"S{i}")
+            self.talked_session(f"S{i}")
 
         metrics = calculate_student_progress(self.student)
 
@@ -110,7 +118,7 @@ class ProgressCalculationTests(MasteryPilotTestCase):
 
     def test_the_session_component_scales_below_the_cap(self):
         for i in range(4):
-            self.make_session(self.student, title=f"S{i}")
+            self.talked_session(f"S{i}")
 
         metrics = calculate_student_progress(self.student)
 
@@ -224,7 +232,9 @@ class RefreshAllProgressCommandTests(MasteryPilotTestCase):
     def setUp(self):
         self.teacher = self.make_teacher("cmd_teacher")
         self.student = self.make_student("cmd_student", teacher=self.teacher.teacherprofile)
-        self.make_session(self.student)
+        session = self.make_session(self.student)
+        self.bootstrap_session(session)
+        self.make_chat(session, "user", "a real question")
 
     def run_command(self, *args):
         out = StringIO()

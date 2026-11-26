@@ -29,7 +29,7 @@ def landing_page(request):
         progress = StudentProgress.objects.get(user=request.user)
         
     quiz_avg = None
-    if progress.quiz_average:
+    if progress.quiz_average is not None:
         quiz_avg = progress.quiz_average * 100
 
     context = {
@@ -54,7 +54,7 @@ def progress_summary(request):
         next_step = "Start your first chat session"
     elif metrics['total_quizzes'] == 0:
         next_step = "Complete your first quiz"
-    elif metrics['quiz_average'] and metrics['quiz_average'] < 70:
+    elif metrics['quiz_average'] is not None and metrics['quiz_average'] < 70:
         next_step = "Review topics and improve quiz scores"
     else:
         next_step = "Continue learning with new topics"
@@ -133,7 +133,7 @@ def progress_detail(request):
             'title': session.title,
             'created_at': session.created_at.isoformat(),
             'quiz_count': quiz_count,
-            'quiz_average': round(session_quiz_avg, 2) if session_quiz_avg else None,
+            'quiz_average': round(session_quiz_avg, 2) if session_quiz_avg is not None else None,
         })
     
     context = {
@@ -141,7 +141,7 @@ def progress_detail(request):
         'metrics': metrics,
         'progress': progress,
         'session_history': session_history,
-        'is_viewing_other': student_id is not None,
+        'is_viewing_other': target_user != request.user,
     }
     
     return render(request, 'progress_detail.html', context)

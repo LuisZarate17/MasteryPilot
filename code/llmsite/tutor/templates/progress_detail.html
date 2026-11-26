@@ -42,7 +42,7 @@
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
       <div class="text-sm font-medium text-gray-500 mb-1">Quiz Average</div>
       <div class="text-3xl font-bold text-gray-900">
-        {% if metrics.quiz_average %}
+        {% if metrics.quiz_average is not None %}
           {{ metrics.quiz_average|floatformat:1 }}%
         {% else %}
           —
@@ -51,6 +51,11 @@
       <div class="mt-2 text-xs text-gray-500">
         {{ metrics.total_quizzes }} quiz{{ metrics.total_quizzes|pluralize:"zes" }} completed
       </div>
+      {% if is_viewing_other %}
+      <div class="mt-1 text-xs text-gray-500">
+        Quizzes abandoned: {{ metrics.abandoned_quizzes }}
+      </div>
+      {% endif %}
     </div>
 
     <!-- Activity Streak -->
@@ -137,7 +142,7 @@
                 {{ session.quiz_count }}
               </td>
               <td class="px-4 py-3 text-sm">
-                {% if session.quiz_average %}
+                {% if session.quiz_average is not None %}
                   <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium
                         {% if session.quiz_average >= 80 %}bg-green-100 text-green-800
                         {% elif session.quiz_average >= 60 %}bg-yellow-100 text-yellow-800
