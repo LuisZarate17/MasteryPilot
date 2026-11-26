@@ -46,7 +46,15 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 DEFAULT_FROM_EMAIL = 'noreply@aitutor.local'
 
 CURRICULUM_ROOT = BASE_DIR / "curriculum"
-DATA_UPLOAD_MAX_MEMORY_SIZE = 100 * 1024 * 1024  # 100 MB
+# Caps request bodies other than file uploads: the JSON the chat API reads is a
+# few hundred bytes. Uploads are limited separately by MAX_UPLOAD_SIZE in
+# tutor/views/curriculum.py, and Django does not count file parts against this.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 1 * 1024 * 1024  # 1 MB
+
+# Whether /signup/ lets anyone who can reach the server create a student
+# account. Off by default: a school's accounts are created or imported by
+# admins. Set DJANGO_ALLOW_SIGNUP=1 to open it.
+ALLOW_SIGNUP = _env_flag("DJANGO_ALLOW_SIGNUP", False)
 
 # Which local model family to talk to. Set LLM_MODULE in .env to switch;
 # LANGUAGE_MODEL_ID overrides the specific checkpoint within a family.
@@ -133,6 +141,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'tutor.context_processors.signup_enabled',
             ],
         },
     },

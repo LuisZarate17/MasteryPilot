@@ -44,10 +44,12 @@
             </button>
         </form>
 
+        {% if allow_signup %}
         <div class="mt-6 text-center text-sm">
             <span class="text-gray-500">Don't have an account?</span>
             <a href="/signup/" class="font-medium text-brand-600 hover:text-brand-500">Sign up</a>
         </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

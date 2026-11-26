@@ -10,7 +10,7 @@ This repository contains an AI tutoring prototype intended for use by school dis
 
 The main product surface is the Django application under `code/llmsite`. It provides:
 
-- Student signup, login, password reset, landing page, progress page, and tutor chat.
+- Student login (signup is off by default; set `DJANGO_ALLOW_SIGNUP=1` to enable it), password reset, landing page, progress page, and tutor chat.
 - Teacher and admin dashboards.
 - Curriculum file upload, viewing, and deletion.
 - Session history, session rename/delete, quiz grading, and chat export.
@@ -46,7 +46,7 @@ Role behavior is implemented in custom profile models:
 
 ### Student-facing
 
-- Account signup and authentication.
+- Account authentication, and optional student signup (off by default; set `DJANGO_ALLOW_SIGNUP=1` to enable it).
 - AI tutor chat sessions with session list, rename, and delete.
 - Quiz rendering and grading flow.
 - Landing page with progress summary.

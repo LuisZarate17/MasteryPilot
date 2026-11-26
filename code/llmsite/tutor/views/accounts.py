@@ -7,6 +7,7 @@ from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.db.models import Sum
+from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 import os
@@ -58,6 +59,8 @@ def _may_manage(actor, target) -> bool:
 
 
 def signup(request):
+    if not settings.ALLOW_SIGNUP:
+        raise Http404("Sign-up is disabled")
     if request.method == "POST":
         form = SignupForm(request.POST)
         if form.is_valid():

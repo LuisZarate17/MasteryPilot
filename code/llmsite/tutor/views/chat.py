@@ -2,10 +2,12 @@
 
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.core.exceptions import RequestDataTooBig
+from django.http import HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
+from datetime import timedelta
 import copy
 import json
 import logging
@@ -21,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 # SQLite does not enforce CharField max_length, so the views have to.
 MAX_TITLE_LENGTH = Session._meta.get_field("title").max_length
+
+# A student's message is a question, not a document; the model's context is
+# finite and every message is stored and replayed on later turns.
+MAX_MESSAGE_CHARS = 4000
+
+# Each new session runs a model generation, so starting them is rate limited.
+MAX_NEW_SESSIONS_PER_MINUTE = 10
 
 
 model = None
@@ -499,8 +508,20 @@ def chat_page(request):
 def api_new_session(request):
     try:
         data = json.loads(request.body.decode("utf-8")) if request.body else {}
+    except RequestDataTooBig:
+        # Over DATA_UPLOAD_MAX_MEMORY_SIZE; say so rather than "Invalid JSON".
+        return JsonResponse({"ok": False, "error": "Request is too large."}, status=413)
     except Exception:
         return HttpResponseBadRequest("Invalid JSON")
+
+    recent = Session.objects.filter(
+        owner=request.user, created_at__gte=timezone.now() - timedelta(minutes=1)
+    ).count()
+    if recent >= MAX_NEW_SESSIONS_PER_MINUTE:
+        return JsonResponse(
+            {"ok": False, "error": "You're starting chats too quickly; wait a minute and try again."},
+            status=429,
+        )
 
     title = (data.get("title") or "New session").strip() or "New session"
     if len(title) > MAX_TITLE_LENGTH:
@@ -555,12 +576,19 @@ def api_new_session(request):
 def api_chat(request):
     try:
         data = json.loads(request.body.decode("utf-8"))
+    except RequestDataTooBig:
+        # Over DATA_UPLOAD_MAX_MEMORY_SIZE; say so rather than "Invalid JSON".
+        return HttpResponse("Request is too large", status=413)
     except Exception:
         return HttpResponseBadRequest("Invalid JSON")
 
     msg = (data.get("message") or "").strip()
     if not msg:
         return HttpResponseBadRequest("message is required")
+    if len(msg) > MAX_MESSAGE_CHARS:
+        return HttpResponseBadRequest(
+            f"Message is too long (max {MAX_MESSAGE_CHARS} characters)"
+        )
 
     active_session = _resolve_session(request, data)
     if active_session is None:
