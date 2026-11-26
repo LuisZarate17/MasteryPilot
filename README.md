@@ -63,20 +63,23 @@ flowchart TD
         S["Relevance floor<br/>MIN_SCORE = 0.45"]
         Q --> BM
         Q --> DN
-        BM --> F
-        DN --> F
-        F --> S
+        DN --> S
+        S -->|"cleared passages"| BM
+        S --> F
+        BM -->|"hits limited to<br/>cleared passages"| F
     end
 
     D --> Q
-    S -->|"passages, or nothing"| L["languagemodel.py<br/>Qwen3 / Mistral / LLaMA<br/>4-bit, on your GPU"]
+    F -->|"passages, or nothing"| L["languagemodel.py<br/>Qwen3 / Mistral / LLaMA<br/>4-bit, on your GPU"]
     L --> A["One step back to the student,<br/>citing the file it used"]
     A --> DB[("SQLite<br/>sessions · quizzes · progress")]
 ```
 
 `MIN_SCORE` is the off-topic guard: when nothing clears the floor the tutor gets
 no passages rather than the least-bad ones, which is what stops "what is the
-capital of France?" from being answered out of an algebra textbook.
+capital of France?" from being answered out of an algebra textbook. Keyword
+matches only count for passages that cleared the floor, so a strong match is not
+padded out with passages that merely share words like "what" and "the".
 
 ## Built by
 

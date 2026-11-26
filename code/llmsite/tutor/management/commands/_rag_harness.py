@@ -151,6 +151,20 @@ def evaluate(rag_module, queries, top_k, min_score=None):
         relevant = set(spec.get("relevant") or [])
 
         rank = next((i for i, doc in enumerate(ranked) if doc in relevant), None)
+
+        # Of what came back, how much was on topic. Hit rate cannot see padding:
+        # one right passage among four wrong ones scores the same as five right
+        # ones. Undefined for an unanswerable query, where rejection is the test.
+        if not relevant:
+            precision = None
+        elif not hits:
+            precision = 0.0
+        else:
+            on_topic = sum(
+                1 for h in hits if h.get("source", "").split("/")[0] in relevant
+            )
+            precision = on_topic / len(hits)
+
         rows.append({
             "query": spec["query"],
             "kind": spec.get("kind", "unspecified"),
@@ -158,6 +172,7 @@ def evaluate(rag_module, queries, top_k, min_score=None):
             "retrieved": ranked,
             "hit": rank is not None,
             "reciprocal_rank": 1.0 / (rank + 1) if rank is not None else 0.0,
+            "precision": precision,
             # Off-topic queries succeed by returning nothing at all.
             "rejected": not hits,
             "scores": [h["score"] for h in hits if "score" in h],
@@ -187,6 +202,7 @@ def _aggregate(rows, top_k):
         "queries": len(rows),
         "answerable": len(answerable),
         f"hit_rate@{top_k}": _mean([float(r["hit"]) for r in answerable]),
+        f"precision@{top_k}": _mean([r["precision"] for r in answerable]),
         "mrr": _mean([r["reciprocal_rank"] for r in answerable]),
         "rejection_accuracy": _mean([float(r["rejected"]) for r in unanswerable]),
         "by_kind": {},
@@ -198,6 +214,7 @@ def _aggregate(rows, top_k):
         summary["by_kind"][kind] = {
             "queries": len(group),
             "hit_rate": _mean([float(r["hit"]) for r in scored]),
+            "precision": _mean([r["precision"] for r in scored]),
             "mrr": _mean([r["reciprocal_rank"] for r in scored]),
             "rejection_accuracy": _mean(
                 [float(r["rejected"]) for r in group if not r["relevant"]]

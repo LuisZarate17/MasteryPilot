@@ -129,6 +129,7 @@ class Command(BaseCommand):
         self.stdout.write("-" * 68)
         for label, key in (
             (f"hit rate @{top_k}", f"hit_rate@{top_k}"),
+            (f"precision @{top_k}", f"precision@{top_k}"),
             ("MRR", "mrr"),
             ("rejection accuracy", "rejection_accuracy"),
             ("score separation", "score_separation"),
@@ -136,11 +137,12 @@ class Command(BaseCommand):
             self.stdout.write(f"{label:<28}{format_metric(summary.get(key)):>12}")
 
         self.stdout.write("-" * 68)
-        self.stdout.write(f"{'by kind':<28}{'hit rate':>12}{'MRR':>12}{'reject':>12}")
+        self.stdout.write(f"{'by kind':<28}{'hit rate':>12}{'precision':>12}{'MRR':>12}{'reject':>12}")
         for kind, stats in summary["by_kind"].items():
             self.stdout.write(
                 f"{kind:<28}"
                 f"{format_metric(stats['hit_rate']):>12}"
+                f"{format_metric(stats['precision']):>12}"
                 f"{format_metric(stats['mrr']):>12}"
                 f"{format_metric(stats['rejection_accuracy']):>12}"
             )
@@ -153,6 +155,7 @@ class Command(BaseCommand):
         self.stdout.write("\nAgainst baseline:")
         for label, key in (
             (f"hit rate @{top_k}", f"hit_rate@{top_k}"),
+            (f"precision @{top_k}", f"precision@{top_k}"),
             ("MRR", "mrr"),
             ("rejection accuracy", "rejection_accuracy"),
             ("score separation", "score_separation"),

@@ -1845,3 +1845,116 @@ class OneBadFileTests(RagTestCase):
         self.assertIsNone(index.index)
         self.assertIsNone(index._loaded_manifest)
         self.assertEqual(index.retrieve("fractions"), [])
+
+
+class FlooredHybridRetrievalTests(RagTestCase):
+    """The cosine floor applies to every passage that comes back.
+
+    The dense leg is stubbed at dense_candidates, the floored list, so these
+    run without faiss or an embedder. What is under test is how retrieve
+    combines that list with BM25, which is plain Python.
+    """
+
+    QUERY = "What is the discriminant"
+    FILLER = "What is the history of the Roman Empire and the fall of Rome"
+
+    def setUp(self):
+        super().setUp()
+        self.index = rag.default_index
+
+    def stub_dense(self, floored):
+        patcher = mock.patch.object(rag.RagIndex, "dense_candidates", return_value=floored)
+        self.addCleanup(patcher.stop)
+        return patcher.start()
+
+    def retrieve(self, query=None, **kwargs):
+        return self.index.retrieve(query or self.QUERY, **kwargs)
+
+    def indices(self, results):
+        texts = [d["text"] for d in self.index.documents]
+        return [texts.index(chunk["text"]) for chunk in results]
+
+    def test_one_relevant_chunk_is_not_padded_out_with_stopword_matches(self):
+        self.index.documents = [doc("The discriminant tells you how many roots a quadratic has")] + [
+            doc(f"{self.FILLER} {n}", idx=n) for n in range(1, 8)
+        ]
+        self.stub_dense([(0, 0.8)])
+
+        self.assertEqual(self.indices(self.retrieve()), [0])
+
+    def test_a_sparse_only_hit_never_appears(self):
+        """BM25 loves document 1; the embedding never cleared it, so it is out."""
+        self.index.documents = [
+            doc("Roots of a quadratic come from a formula"),
+            doc("The discriminant discriminant discriminant"),
+            doc(self.FILLER),
+        ]
+        self.stub_dense([(0, 0.8)])
+
+        self.assertEqual(self.indices(self.retrieve("discriminant")), [0])
+
+    def test_the_sparse_leg_still_reranks_what_cleared_the_floor(self):
+        """Fifth by cosine, first by keyword: the rare term decides."""
+        self.index.documents = [doc(f"A passage about topic {n}", idx=n) for n in range(4)] + [
+            doc("A passage that mentions the discriminant", idx=4)
+        ] + [doc(f"{self.FILLER} {n}", idx=n) for n in range(5, 9)]
+        self.stub_dense([(0, 0.90), (1, 0.88), (2, 0.86), (3, 0.84), (4, 0.82)])
+
+        results = self.retrieve("discriminant")
+
+        self.assertEqual(self.indices(results)[0], 4)
+        self.assertEqual(sorted(self.indices(results)), [0, 1, 2, 3, 4])
+
+    def test_a_passage_pruned_by_the_relative_cutoff_can_return_on_a_strong_keyword_match(self):
+        """It cleared the floor, so an exact-term question may re-admit it."""
+        self.index.documents = [
+            doc("A passage about fractions"),
+            doc("The discriminant of a quadratic", idx=1),
+            doc(self.FILLER, idx=2),
+        ]
+        # 0.5 is under 0.6 * 0.9, so the dense ranking alone would drop it.
+        self.assertLess(0.5, 0.9 * rag.RELATIVE_CUTOFF)
+        self.stub_dense([(0, 0.9), (1, 0.5)])
+
+        self.assertEqual(sorted(self.indices(self.retrieve("discriminant"))), [0, 1])
+
+    def test_a_pruned_passage_without_a_keyword_match_stays_out(self):
+        self.index.documents = [doc("A passage about fractions"), doc("Another about ratios", idx=1)]
+        self.stub_dense([(0, 0.9), (1, 0.5)])
+
+        self.assertEqual(self.indices(self.retrieve("discriminant")), [0])
+
+    def test_nothing_clearing_the_floor_returns_nothing(self):
+        self.index.documents = [doc("The discriminant tells you how many roots a quadratic has")]
+        self.stub_dense([])
+
+        with mock.patch.object(self.index, "get_bm25") as bm25:
+            self.assertEqual(self.retrieve("discriminant"), [])
+
+        bm25.assert_not_called()
+
+    def test_the_floor_is_handed_to_the_dense_leg_over_a_wide_pool(self):
+        self.index.documents = [doc("The discriminant")]
+        stub = self.stub_dense([(0, 0.8)])
+
+        self.retrieve("discriminant", top_k=3, min_score=0.3)
+
+        stub.assert_called_once_with("discriminant", max(3 * rag.CANDIDATE_MULTIPLIER, rag.MIN_CANDIDATES), 0.3)
+
+    def test_the_score_is_the_fused_rank_value_not_a_similarity(self):
+        self.index.documents = [doc("The discriminant")]
+        self.stub_dense([(0, 0.8)])
+
+        score = self.retrieve("discriminant")[0]["score"]
+
+        self.assertAlmostEqual(score, 2 / (rag.RRF_K + 1))
+        self.assertLess(score, rag.MIN_SCORE)
+
+    def test_dense_search_is_the_floored_list_pruned_to_the_best(self):
+        stub = self.stub_dense([(0, 0.9), (1, 0.8), (2, 0.5)])
+
+        found = self.index.dense_search("q", 10, 0.4)
+
+        self.assertEqual(found, rag.prune_to_best([(0, 0.9), (1, 0.8), (2, 0.5)], rag.RELATIVE_CUTOFF))
+        self.assertEqual(found, [(0, 0.9), (1, 0.8)])
+        stub.assert_called_once_with("q", 10, 0.4)
