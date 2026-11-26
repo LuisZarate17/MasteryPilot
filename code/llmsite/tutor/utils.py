@@ -69,7 +69,14 @@ def calculate_student_progress(user):
     )
     
     total_quizzes = graded_quizzes.count()
-    
+
+    # Quizzes the student walked away from: requesting a new quiz marks the old
+    # active one "submitted", and nothing else ever does.
+    abandoned_quizzes = Quiz.objects.filter(
+        session__owner=user,
+        status='submitted'
+    ).count()
+
     # Calculate quiz average from graded_json
     quiz_average = None
     earned_total = 0.0
@@ -90,10 +97,17 @@ def calculate_student_progress(user):
         # small — a student with every answer right scored 0.7 instead of 70.
         quiz_component = quiz_average * 70.0
     
+    # Only sessions where the student actually sent something count. Every
+    # session stores a hidden bootstrap row with role="user", so a bare user
+    # row proves nothing; _has_student_message looks past it. Imported here
+    # because views.chat imports this module.
+    from .views.chat import _has_student_message
+    active_sessions = sum(1 for s in sessions if _has_student_message(s))
+
     session_component = 0.0
-    if total_sessions > 0:
-        # Cap session activity at 10 sessions for 100% of this component
-        session_score = min(total_sessions / 10, 1.0)
+    if active_sessions > 0:
+        # Cap session activity at 10 such sessions for 100% of this component
+        session_score = min(active_sessions / 10, 1.0)
         session_component = session_score * 30.0
     
     overall_completion = quiz_component + session_component
@@ -139,6 +153,7 @@ def calculate_student_progress(user):
         'total_sessions': total_sessions,
         'total_quizzes': total_quizzes,
         'total_messages': total_messages,
+        'abandoned_quizzes': abandoned_quizzes,
     }
 
 

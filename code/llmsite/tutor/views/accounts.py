@@ -6,13 +6,18 @@ from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db.models import Sum
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 import os
 
 from ..forms import SignupForm
-from ..models import AdminProfile, StudentProfile, StudentProgress, TeacherProfile
+from ..models import AdminProfile, Quiz, StudentProfile, StudentProgress, TeacherProfile
 from ..utils import is_admin, is_teacher_or_admin
+
+# Fewest graded questions before a low quiz average flags a student for
+# intervention; one wrong answer on a one-question quiz is not a trend.
+MIN_GRADED_QUESTIONS_FOR_FLAG = 5
 
 
 def _split_full_name(full_name: str) -> tuple[str, str, str]:
@@ -103,13 +108,24 @@ def dashboard_page(request):
         if progress.quiz_average is None:
             continue
 
+        # Every question is worth one point, so possible_pts is the number of
+        # questions the student has been graded on. A handful of answers is too
+        # little evidence to flag anyone.
+        graded_questions = int(
+            Quiz.objects.filter(session__owner=student.user, status="graded")
+            .aggregate(total=Sum("possible_pts"))["total"]
+            or 0
+        )
+        if graded_questions < MIN_GRADED_QUESTIONS_FOR_FLAG:
+            continue
+
         if progress.quiz_average < 0.7:
             if progress.quiz_average < 0.5:
-                intervention_list.append((student, 1))
+                intervention_list.append((student, 1, graded_questions))
                 intervention_alert = True
             else:
-                intervention_list.append((student, 0))
-                
+                intervention_list.append((student, 0, graded_questions))
+
 
     context = {
         "intervention_alert": intervention_alert,
