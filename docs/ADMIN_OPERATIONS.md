@@ -62,7 +62,7 @@ Additional student fields:
 
 ### Delete an account
 
-Admins can delete teacher, admin, or student accounts from the dashboard. The current code prevents an admin from deleting their own account through the custom delete flow.
+Admins can delete teacher, admin, or student accounts from the dashboard. The current code prevents an admin from deleting their own account through the custom delete flow. Regular admins (those with an admin profile) can manage teachers, students, and other admins, but they cannot delete a superuser or change a superuser's password; only a superuser can.
 
 ### Edit a student
 
