@@ -108,6 +108,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # Directly after SecurityMiddleware, as the WhiteNoise docs require. Serves
+    # static files under gunicorn with DEBUG off, which the documented deploy
+    # (setup.sh --serve) needs: runserver only serves them when DEBUG is on and
+    # nothing else did, so every page loaded unstyled.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -188,6 +193,14 @@ STATICFILES_DIRS = [
 ]
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
+
+# Compressed, but not the Manifest variant: that one fails collectstatic on any
+# url() it cannot resolve, and the vendored KaTeX CSS names .woff and .ttf font
+# fallbacks that are intentionally not shipped (browsers use the .woff2).
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "whitenoise.storage.CompressedStaticFilesStorage"},
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

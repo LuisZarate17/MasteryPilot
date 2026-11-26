@@ -1,3 +1,4 @@
+{% load static %}
 <!-- base.html -->
 <!DOCTYPE html>
 <html lang="en">
@@ -6,28 +7,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}MasteryPilot{% endblock %}</title>
 
-  <!-- Tailwind CSS via CDN (for prototype) -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            brand: { 500: '#5b6df2', 600: '#3f51d7', 700: '#2f3dad' }
-          }
-        }
-      }
-    }
-  </script>
-
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <!-- Prebuilt Tailwind CSS, served from our own static files. -->
+  <link rel="stylesheet" href="{% static 'css/app.css' %}">
   <style>
-    body { font-family: 'Inter', system-ui, sans-serif; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   </style>
 </head>
 <body class="bg-gray-50 text-gray-900">
   <!-- Navbar -->
-  {% load static %}
   <nav class="bg-white border-b border-gray-200">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
       <a href="/" class="flex items-center gap-2 font-semibold text-brand-600 text-lg">

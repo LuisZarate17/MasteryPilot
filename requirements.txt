@@ -11,3 +11,5 @@
 Django==5.2.7
 gunicorn==26.0.0
 python-dotenv==1.2.2
+# Serves static files (CSS, KaTeX, favicon) under gunicorn with DEBUG off.
+whitenoise==6.12.0

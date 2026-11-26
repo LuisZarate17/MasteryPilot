@@ -11,6 +11,8 @@ __pycache__/
 venv/
 .venv/
 db.sqlite3
+# collectstatic output (STATIC_ROOT)
+code/llmsite/staticfiles/
 *.sqlite3
 *.sqlite3-journal
 # venv install dirs — root only, so a real static/lib/ is never swallowed
