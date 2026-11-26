@@ -1,8 +1,11 @@
 """Signup, the staff dashboard, and account administration."""
 
 from django.conf import settings
+from django.contrib import messages
 from django.contrib.auth import get_user_model, login
 from django.contrib.auth.decorators import login_required, user_passes_test
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_http_methods
 import os
@@ -33,6 +36,20 @@ def _display_name_for_user(user, explicit_name: str = "") -> str:
         return full_name
 
     return user.username
+
+
+def _password_problems(password, user) -> list[str]:
+    """Messages from the configured password validators; empty means acceptable."""
+    try:
+        validate_password(password, user=user)
+    except ValidationError as exc:
+        return list(exc.messages)
+    return []
+
+
+def _may_manage(actor, target) -> bool:
+    """Only a superuser may touch a superuser's account."""
+    return actor.is_superuser or not target.is_superuser
 
 
 def signup(request):
@@ -130,13 +147,31 @@ def account_create(request):
     classes = (request.POST.get("classes") or "").strip()
 
     if not role or not username or not password:
+        messages.error(request, "Role, username and password are required.")
         return redirect("dashboard")
-    
+
+    if role not in ("teacher", "admin", "student"):
+        messages.error(request, "Choose teacher, admin or student as the role.")
+        return redirect("dashboard")
+
     if User.objects.filter(username=username).exists():
+        messages.error(request, f"The username {username} is already taken.")
         return redirect("dashboard")
 
     _, first_name, last_name = _split_full_name(full_name)
-    
+
+    # Unsaved user, so the similarity validator can compare against its fields.
+    candidate = User(
+        username=username,
+        email=email,
+        first_name=first_name,
+        last_name=last_name,
+    )
+    problems = _password_problems(password, candidate)
+    if problems:
+        messages.error(request, " ".join(problems))
+        return redirect("dashboard")
+
     user = User.objects.create_user(
         username=username,
         email=email,
@@ -151,16 +186,15 @@ def account_create(request):
         TeacherProfile.objects.create(user=user, display_name=display_name)
     elif role == "admin":
         AdminProfile.objects.create(user=user, display_name=display_name)
-    elif role == "student":
+    else:
         StudentProfile.objects.create(
             user=user,
             display_name=display_name,
             grade=grade,
             classes=classes,
         )
-    else:
-        user.delete()
 
+    messages.success(request, f"Created {role} account {username}.")
     return redirect("dashboard")
 
 
@@ -172,27 +206,36 @@ def account_password_edit(request):
     pw = request.POST.get("password")
     pwc = request.POST.get("password_confirm")
 
+    # Check the password first: with both fields absent `pw == pwc` is
+    # None == None, and set_password(None) would lock the account.
+    if not pw:
+        messages.error(request, "Enter a new password.")
+        return redirect("dashboard")
 
-    if pw == pwc:
-        
-        # Guard against missing or non numeric student id
-        try:
-            user_id = int(user_id_raw)
-        except (TypeError, ValueError):
-            return redirect("dashboard")
+    if pw != pwc:
+        messages.error(request, "The passwords do not match.")
+        return redirect("dashboard")
 
+    User = get_user_model()
 
-        User = get_user_model()
+    try:
+        target = User.objects.get(id=int(user_id_raw))
+    except (TypeError, ValueError, User.DoesNotExist):
+        messages.error(request, "That account was not found.")
+        return redirect("dashboard")
 
+    if not _may_manage(request.user, target):
+        messages.error(request, "Only a superuser can change a superuser's password.")
+        return redirect("dashboard")
 
-        try:
-            user = User.objects.get(id=user_id)
-            user.set_password(pw)
-            user.save()
+    problems = _password_problems(pw, target)
+    if problems:
+        messages.error(request, " ".join(problems))
+        return redirect("dashboard")
 
-        except User.DoesNotExist:
-            pass
-        
+    target.set_password(pw)
+    target.save()
+    messages.success(request, f"Password changed for {target.username}.")
     return redirect("dashboard")
 
 
@@ -203,22 +246,25 @@ def account_delete(request):
     User = get_user_model()
 
     user_id = request.POST.get("user_id")
-    role = (request.POST.get("role") or "").strip()
-
-    if not user_id:
-        return redirect("dashboard")
 
     try:
-        user = User.objects.get(id=user_id)
-    except User.DoesNotExist:
+        user = User.objects.get(id=int(user_id))
+    except (TypeError, ValueError, User.DoesNotExist):
+        messages.error(request, "That account was not found.")
         return redirect("dashboard")
 
     # Do not let an admin delete themselves
     if user == request.user:
+        messages.error(request, "You cannot delete your own account.")
         return redirect("dashboard")
 
-    user.delete()
+    if not _may_manage(request.user, user):
+        messages.error(request, "Only a superuser can delete a superuser account.")
+        return redirect("dashboard")
 
+    username = user.username
+    user.delete()
+    messages.success(request, f"Deleted account {username}.")
     return redirect("dashboard")
 
 
@@ -243,6 +289,23 @@ def student_edit(request):
     except StudentProfile.DoesNotExist:
         return redirect("dashboard")
 
+    # A submitted password is checked before anything is saved, so a rejected
+    # change does not leave the class or teacher edits half applied.
+    password_submitted = bool(pw or pwc)
+    if password_submitted:
+        problem = None
+        if not _may_manage(request.user, student.user):
+            problem = "Only a superuser can change a superuser's password."
+        elif pw != pwc:
+            problem = "The passwords do not match."
+        else:
+            problems = _password_problems(pw, student.user)
+            if problems:
+                problem = " ".join(problems)
+        if problem:
+            messages.error(request, problem)
+            return redirect("dashboard")
+
     student.classes = classes
 
     # Clean teacher id too
@@ -259,9 +322,11 @@ def student_edit(request):
     # no password fields when the admin is just reassigning a teacher, and
     # `pw == pwc` was true for None == None — which called set_password(None)
     # and silently left the account with an unusable password.
-    if pw and pw == pwc:
+    if password_submitted:
         student.user.set_password(pw)
     student.save()
     student.user.save()
 
+    name = student.display_name or student.user.username
+    messages.success(request, f"Saved changes for {name}.")
     return redirect("dashboard")

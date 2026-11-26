@@ -3,7 +3,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from tutor.models import StudentProfile
+from tutor.models import AdminProfile, StudentProfile, TeacherProfile
 import csv
 
 REQUIRED_COLUMNS = {"username", "password"}
@@ -76,6 +76,18 @@ class Command(BaseCommand):
                 first_name, last_name = _split_full_name(full_name)
 
                 user, created = User.objects.get_or_create(username=username)
+                if not created and (
+                    user.is_superuser
+                    or user.is_staff
+                    or TeacherProfile.objects.filter(user=user).exists()
+                    or AdminProfile.objects.filter(user=user).exists()
+                ):
+                    errors.append(
+                        f"line {line_number} ({username}): this username "
+                        "belongs to a staff account; refusing to import it "
+                        "as a student"
+                    )
+                    continue
                 set_password = created or reset_passwords
 
                 if set_password:
