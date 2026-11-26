@@ -8,9 +8,9 @@ This manual describes how students, teachers, and admins use the AI Tutor web ap
 
 ### 1. Sign up or sign in
 
-Students can create an account from the signup page or log in with an existing account.
+Students log in with an account an admin created or imported for them. Sign-up is off by default; a site owner can turn on the signup page by setting `DJANGO_ALLOW_SIGNUP=1`, which lets anyone who can reach the server create a student account.
 
-During signup, the form may request:
+When signup is on, the form may request:
 
 - Username
 - Full name

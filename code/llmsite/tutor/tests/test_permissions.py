@@ -13,6 +13,7 @@ are easy to get wrong and are pinned deliberately:
 """
 
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from django.urls import reverse
 from unittest.mock import patch
 import json
@@ -97,6 +98,7 @@ class AnonymousAccessTests(MasteryPilotTestCase):
             self.client.get(reverse("curriculum_delete")).status_code, 302
         )
 
+    @override_settings(ALLOW_SIGNUP=True)
     def test_signup_is_public(self):
         self.assertEqual(self.client.get(reverse("signup")).status_code, 200)
 
@@ -489,6 +491,7 @@ class StudentIdParameterTests(MasteryPilotTestCase):
         self.assertNotIn("Other distinctive title", response.content.decode())
 
 
+@override_settings(ALLOW_SIGNUP=True)
 class SignupCannotCreateStaffTests(MasteryPilotTestCase):
     def test_extra_privilege_fields_are_ignored(self):
         from ..utils import is_admin, is_teacher_or_admin

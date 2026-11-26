@@ -31,7 +31,7 @@
           </form>
         {% else %}
           <a href="/login/" class="hover:text-brand-700">Login</a>
-          <a href="/signup/" class="hover:text-brand-700">Signup</a>
+          {% if allow_signup %}<a href="/signup/" class="hover:text-brand-700">Signup</a>{% endif %}
         {% endif %}
       </div>
     </div>

@@ -174,6 +174,22 @@ python manage.py runserver
 
 Open <http://127.0.0.1:8000/> and sign in as `admin` with the password you set.
 
+Sign-up is off by default, so students cannot create their own accounts: admins
+create or import them. Set `DJANGO_ALLOW_SIGNUP=1` in `.env` to open `/signup/`.
+
+#### Test accounts
+
+For local testing, with `DJANGO_DEBUG=1`, create a demo admin, teacher and three
+students (one of them with no teacher):
+
+```
+python manage.py create_demo_accounts
+```
+
+It prints a random password once; set `DEMO_PASSWORD` in `.env` or pass
+`--password` to choose your own, and `--reset-passwords` to change the password
+on accounts that already exist. It refuses to run with debug off.
+
 ### Server deploy (Linux)
 
 `setup.sh` does the same work non-interactively — virtualenv, dependencies,

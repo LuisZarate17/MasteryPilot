@@ -1,12 +1,14 @@
 """Signup, admin account creation, and student record edits."""
 
 from django.contrib.auth import get_user_model
+from django.test import override_settings
 from django.urls import reverse
 
 from ..models import StudentProfile, TeacherProfile
 from .base import PASSWORD, MasteryPilotTestCase
 
 
+@override_settings(ALLOW_SIGNUP=True)
 class SignupNameTests(MasteryPilotTestCase):
     def test_signup_persists_full_name_to_user_and_profile(self):
         response = self.client.post(reverse("signup"), {
