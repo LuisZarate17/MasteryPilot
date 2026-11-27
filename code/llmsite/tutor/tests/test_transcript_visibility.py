@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import tempfile
+from unittest import mock
 
 from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -222,6 +223,10 @@ class CurriculumOverwriteTests(MasteryPilotTestCase):
         self.addCleanup(shutil.rmtree, self.tmp, True)
         rag.default_index.invalidate = lambda: None
         self.addCleanup(rag.default_index.__dict__.pop, "invalidate", None)
+        # An upload rebuilds the index; there is no embedder in the test run.
+        patcher = mock.patch.object(rag, "ensure_curriculum_loaded")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         self.teacher_a = self.make_teacher("tv_teacher_a")
         self.teacher_b = self.make_teacher("tv_teacher_b")

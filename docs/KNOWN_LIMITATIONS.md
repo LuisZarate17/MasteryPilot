@@ -67,7 +67,7 @@ questions, and one of them was wrong because of it.
 - Teachers can upload curriculum but not delete it; deletion is admin-only (`curriculum_delete` is gated on `is_admin`, and the dashboard hides the control accordingly).
 - Chunk size is set from the embedding model's context window rather than from measurement. `rag_eval --chunk-size` exists to settle it against real numbers.
 - Index invalidation is per process. Deleting curriculum takes effect immediately for the worker that handled the request, and at the next chat-session start for the others. Under a single worker — the default — this is not observable.
-- A curriculum change rebuilds the whole index rather than removing individual entries. This is deliberate: incremental removal requires renumbering FAISS ids in step with a parallel metadata list, and a mismatch there misattributes passages silently. Rebuilding the 5,125-chunk textbook corpus takes 41 seconds.
+- A curriculum change rebuilds the whole index rather than removing individual entries. This is deliberate: incremental removal requires renumbering FAISS ids in step with a parallel metadata list, and a mismatch there misattributes passages silently. Rebuilding the 5,125-chunk textbook corpus takes 41 seconds; the upload or delete request that caused it waits for the rebuild, and starting a chat session is the fallback if that rebuild failed.
 
 ## Product and UX Limits
 

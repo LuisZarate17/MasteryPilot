@@ -91,9 +91,11 @@ message in the server log, and the rest of the curriculum still indexes.
 
 ### When changes take effect
 
-Uploading or deleting a file marks the search index stale. It is rebuilt the
-next time a chat session opens, which takes seconds for a pilot-sized
-curriculum. Deleted documents stop being retrievable at that point and stay
+Uploading or deleting a file rebuilds the search index before the page
+returns, so the upload or delete takes as long as the rebuild (seconds for a
+pilot-sized curriculum, about 40 seconds for the full textbook). If the rebuild
+fails, the page says so and the index is rebuilt the next time a chat session
+opens. Deleted documents stop being retrievable once it is rebuilt and stay
 gone across restarts — there is no cached copy to clear by hand.
 
 ### Curriculum storage

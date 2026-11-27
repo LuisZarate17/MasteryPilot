@@ -16,7 +16,9 @@ from unittest.mock import patch
 
 from django.urls import reverse
 import json
+import threading
 
+from ..views import chat
 from ..models import Chat as DBChat, Quiz, Session
 from ..views.chat import _has_student_message, _is_bootstrap_user_message
 from .base import FakeAdapter, MasteryPilotTestCase
@@ -70,6 +72,9 @@ class UnloadedModel:
         self._patches = [
             patch("tutor.views.chat.model", None),
             patch("tutor.views.chat.tokenizer", None),
+            # Restored on exit, so the failure cooldown this sets off cannot
+            # leak into the next test.
+            patch("tutor.views.chat._init_failed_at", None),
             patch("tutor.views.chat._adapter", return_value=failing),
         ]
         for p in self._patches:
@@ -710,3 +715,142 @@ class RepeatedQuizRegenerationTests(MasteryPilotTestCase):
 
         self.assertEqual(len(adapter.send_message_calls), 1)
         self.assertIn("What is 2 + 2?", response.json()["model_text"])
+
+
+class LazyModelLoadTests(MasteryPilotTestCase):
+    """The model loads once, from one thread at a time, and a failure backs off."""
+
+    def setUp(self):
+        for name in ("model", "tokenizer"):
+            patcher = patch(f"tutor.views.chat.{name}", None)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        chat._init_failed_at = None
+        self.addCleanup(setattr, chat, "_init_failed_at", None)
+
+    def test_two_threads_arriving_together_load_the_model_once(self):
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def slow_init():
+            calls.append(threading.current_thread().name)
+            entered.set()
+            release.wait(timeout=5)
+            return "the-model", "the-tokenizer"
+
+        adapter = mock.Mock()
+        adapter.init_model.side_effect = slow_init
+        seen = []
+
+        def request():
+            chat.ensure_llm_initialized()
+            seen.append((chat.model, chat.tokenizer))
+
+        with patch("tutor.views.chat._adapter", return_value=adapter):
+            first = threading.Thread(target=request, name="first")
+            second = threading.Thread(target=request, name="second")
+            first.start()
+            self.assertTrue(entered.wait(timeout=5))
+            second.start()
+            # Long enough for the second thread to reach the lock (or, with no
+            # lock, to start a second load) before the first finishes.
+            second.join(timeout=0.3)
+            release.set()
+            first.join(timeout=5)
+            second.join(timeout=5)
+
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(adapter.init_model.call_count, 1)
+        self.assertEqual(seen, [("the-model", "the-tokenizer")] * 2)
+
+    def test_a_failed_load_is_not_retried_straight_away(self):
+        adapter = mock.Mock()
+        adapter.init_model.side_effect = RuntimeError("no GPU")
+
+        with patch("tutor.views.chat._adapter", return_value=adapter),                 self.assertLogs("tutor.views.chat", level="ERROR"):
+            chat.ensure_llm_initialized()
+            chat.ensure_llm_initialized()
+
+        self.assertEqual(adapter.init_model.call_count, 1)
+        self.assertIsNone(chat.model)
+        self.assertIsNone(chat.tokenizer)
+        self.assertIsNotNone(chat._init_failed_at)
+
+    def test_a_failed_load_is_retried_after_the_cooldown(self):
+        adapter = mock.Mock()
+        adapter.init_model.side_effect = RuntimeError("no GPU")
+
+        with patch("tutor.views.chat._adapter", return_value=adapter),                 self.assertLogs("tutor.views.chat", level="ERROR"):
+            chat.ensure_llm_initialized()
+            failed_at = chat._init_failed_at
+
+            with patch(
+                "tutor.views.chat.time.monotonic",
+                return_value=failed_at + chat.INIT_RETRY_SECONDS - 1,
+            ):
+                chat.ensure_llm_initialized()
+            self.assertEqual(adapter.init_model.call_count, 1)
+
+            with patch(
+                "tutor.views.chat.time.monotonic",
+                return_value=failed_at + chat.INIT_RETRY_SECONDS + 1,
+            ):
+                chat.ensure_llm_initialized()
+            self.assertEqual(adapter.init_model.call_count, 2)
+
+    def test_a_later_success_clears_the_failure(self):
+        adapter = mock.Mock()
+        adapter.init_model.side_effect = [RuntimeError("no GPU"), ("m", "t")]
+
+        with patch("tutor.views.chat._adapter", return_value=adapter),                 self.assertLogs("tutor.views.chat", level="ERROR"):
+            chat.ensure_llm_initialized()
+            failed_at = chat._init_failed_at
+            with patch(
+                "tutor.views.chat.time.monotonic",
+                return_value=failed_at + chat.INIT_RETRY_SECONDS + 1,
+            ):
+                chat.ensure_llm_initialized()
+
+        self.assertEqual((chat.model, chat.tokenizer), ("m", "t"))
+        self.assertIsNone(chat._init_failed_at)
+
+    def test_a_loaded_model_is_not_loaded_again(self):
+        adapter = mock.Mock()
+        adapter.init_model.return_value = ("m", "t")
+
+        with patch("tutor.views.chat._adapter", return_value=adapter):
+            chat.ensure_llm_initialized()
+            chat.ensure_llm_initialized()
+
+        self.assertEqual(adapter.init_model.call_count, 1)
+
+    def test_opening_the_chat_page_does_not_load_the_model(self):
+        student = self.make_student("page_student")
+        self.client.force_login(student)
+        adapter = mock.Mock()
+
+        with patch("tutor.views.chat._adapter", return_value=adapter):
+            response = self.client.get(reverse("chat"))
+
+        self.assertEqual(response.status_code, 200)
+        adapter.init_model.assert_not_called()
+
+    def test_a_new_session_during_the_cooldown_reports_the_tutor_unavailable(self):
+        student = self.make_student("cooldown_student")
+        self.client.force_login(student)
+        adapter = mock.Mock()
+        chat._init_failed_at = chat.time.monotonic()
+
+        with patch("tutor.views.chat._adapter", return_value=adapter):
+            response = self.client.post(
+                reverse("api_new_session"),
+                data=json.dumps({"title": "Offline"}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("unavailable", response.json()["error"])
+        adapter.init_model.assert_not_called()
+        adapter.start_chat.assert_not_called()
+        self.assertFalse(Session.objects.filter(owner=student).exists())

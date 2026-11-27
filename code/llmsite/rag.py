@@ -31,6 +31,7 @@ import logging
 import math
 import os
 import re
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -691,6 +692,14 @@ class RagIndex:
         # repeat load cheap and a changed corpus visible.
         self._loaded_manifest = None
 
+        # Two locks, for two jobs. _build_lock serialises ensure_curriculum_loaded
+        # (loading from disk and rebuilding), which can take most of a minute.
+        # _swap_lock is held only while the served corpus is replaced and while
+        # retrieve reads it, so a rebuild never makes a search wait for the build.
+        # Plain Locks: nothing that runs under either takes the same one again.
+        self._build_lock = threading.Lock()
+        self._swap_lock = threading.Lock()
+
     # ── Lazily built singletons ──────────────────────────────────────────────
 
     def get_embedder(self):
@@ -824,9 +833,10 @@ class RagIndex:
         documents = payload["documents"]
         if payload["ntotal"] == 0:
             # Nothing was indexed, so there is no vector file to read.
-            self.index = None
-            self.documents = []
-            self._bm25 = None
+            with self._swap_lock:
+                self.index = None
+                self.documents = []
+                self._bm25 = None
             logger.info("Index loaded from disk: empty corpus")
             return
 
@@ -844,12 +854,14 @@ class RagIndex:
                 f"{len(documents)} documents against {index.ntotal} vectors"
             )
 
-        self.index = index
-        self.documents = documents
-        self._bm25 = None
         # Taken from the file, so reopening an index never has to load a model
         # just to learn how wide its vectors are.
-        self.dimension = payload.get("dimension") or index.d
+        dimension = payload.get("dimension") or index.d
+        with self._swap_lock:
+            self.index = index
+            self.documents = documents
+            self._bm25 = None
+            self.dimension = dimension
         logger.info("Index loaded from disk: %s vectors", index.ntotal)
 
     # ── Corpus fingerprinting ────────────────────────────────────────────────
@@ -954,30 +966,37 @@ class RagIndex:
 
         The cost of re-checking is one os.walk plus a stat per file. This runs
         when a chat session opens, not per message, so that is not a hot path.
+
+        The whole body runs under _build_lock, so two callers never build at
+        once: the second waits, then finds the manifest current and returns.
+        The slow rebuild is normally done by the upload and delete views, so
+        the staff member who changed the curriculum waits for it; opening a
+        session is the fallback that catches a restart or a failed rebuild.
         """
-        curriculum_path = curriculum_path or self.curriculum_path
-        self.curriculum_path = curriculum_path
+        with self._build_lock:
+            curriculum_path = curriculum_path or self.curriculum_path
+            self.curriculum_path = curriculum_path
 
-        if not curriculum_path or not os.path.exists(curriculum_path):
-            logger.info("No curriculum folder found; skipping")
-            return
-
-        current = self.scan_manifest(curriculum_path)
-
-        # Already serving exactly this corpus — nothing to do.
-        if self._loaded_manifest == current and self.documents:
-            return
-
-        if not self.is_index_stale(curriculum_path, current):
-            try:
-                self.load_index()
-                self._loaded_manifest = current
+            if not curriculum_path or not os.path.exists(curriculum_path):
+                logger.info("No curriculum folder found; skipping")
                 return
-            except IndexUnusable as exc:
-                logger.warning("Cached index rejected (%s) - rebuilding", exc)
 
-        logger.info("Curriculum changed or unindexed - rebuilding from %s", curriculum_path)
-        self._rebuild(curriculum_path, current)
+            current = self.scan_manifest(curriculum_path)
+
+            # Already serving exactly this corpus — nothing to do.
+            if self._loaded_manifest == current and self.documents:
+                return
+
+            if not self.is_index_stale(curriculum_path, current):
+                try:
+                    self.load_index()
+                    self._loaded_manifest = current
+                    return
+                except IndexUnusable as exc:
+                    logger.warning("Cached index rejected (%s) - rebuilding", exc)
+
+            logger.info("Curriculum changed or unindexed - rebuilding from %s", curriculum_path)
+            self._rebuild(curriculum_path, current)
 
     def invalidate(self):
         """Forget what is loaded, so the next load re-reads the corpus.
@@ -1003,39 +1022,61 @@ class RagIndex:
         Python list — and a desync there does not raise, it answers with the
         wrong text under the wrong source. Rebuilding a pilot corpus takes
         seconds and cannot get that wrong.
+
+        The new corpus is built in a scratch RagIndex and swapped in at the
+        end, so a search running meanwhile keeps reading the old one whole
+        instead of a half-filled list. Callers hold _build_lock.
         """
         if manifest is None:
             manifest = self.scan_manifest(curriculum_path)
 
-        self.documents = []
-        self.index = None
-        self._bm25 = None
-
         try:
-            self.load_curriculum_folder(curriculum_path)
+            scratch = RagIndex(
+                curriculum_path=curriculum_path,
+                index_path=self.index_path,
+                docs_path=self.docs_path,
+                embed_model=self.embed_model,
+            )
+            # Shared only if already loaded; the scratch otherwise asks for the
+            # shared embedder by name when it first needs one.
+            scratch.embedder = self.embedder
+            scratch.dimension = self.dimension
+
+            scratch.load_curriculum_folder(curriculum_path)
             # load_files skips a file that fails, which is right for one bad
             # upload. When every supported file fails, though, the cause is
             # almost never the files (the embedder would not load, say), and
             # saving that empty index under the current manifest would make it
             # stick until someone edits a file. Treat it as a failed build so
             # the next session retries.
-            if not self.documents and any(
+            if not scratch.documents and any(
                 os.path.splitext(path)[1].lower() in EXTRACTORS for path in manifest
             ):
                 raise RuntimeError(
                     "Curriculum files were found but none could be indexed; "
                     "not saving an empty index"
                 )
-            self._maybe_upgrade_to_ivf()
+            scratch._maybe_upgrade_to_ivf()
+
+            with self._swap_lock:
+                self.documents = scratch.documents
+                self.index = scratch.index
+                if scratch.dimension is not None:
+                    self.dimension = scratch.dimension
+                self._bm25 = None
+            if self.embedder is None:
+                self.embedder = scratch.embedder
+            # save_index writes what is being served, so it follows the swap.
             self.save_index(manifest)
         except Exception:
             # Per-file failures are absorbed in load_files, so this is the
             # walk, the IVF upgrade or the write failing. Leave the process
             # empty rather than half-built, and unmarked, so the next session
             # retries instead of trusting a corpus that never finished.
-            self.documents = []
-            self.index = None
-            self._bm25 = None
+            with self._swap_lock:
+                self.documents = []
+                self.index = None
+                self._bm25 = None
             self._loaded_manifest = None
             raise
         self._loaded_manifest = manifest
@@ -1102,6 +1143,12 @@ class RagIndex:
         0.033), not a similarity. It orders results and nothing else, so
         nothing downstream should compare it with MIN_SCORE.
         """
+        # Held for the whole search so documents, vectors and term statistics
+        # all come from one corpus. A rebuild only takes this lock to swap.
+        with self._swap_lock:
+            return self._retrieve_locked(query, top_k, min_score)
+
+    def _retrieve_locked(self, query, top_k, min_score):
         if not self.documents:
             return []
 

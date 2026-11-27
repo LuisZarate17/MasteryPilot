@@ -11,7 +11,7 @@ import shutil
 import tempfile
 from datetime import timedelta
 from io import StringIO
-from unittest import skipIf
+from unittest import mock, skipIf
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -116,6 +116,10 @@ class UploadStillWorksTests(MasteryPilotTestCase):
 
         rag.default_index.invalidate = lambda: None
         self.addCleanup(rag.default_index.__dict__.pop, "invalidate", None)
+        # An upload rebuilds the index; there is no embedder in the test run.
+        patcher = mock.patch.object(rag, "ensure_curriculum_loaded")
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
         self.client.force_login(self.make_admin("limits_admin"))
 
