@@ -156,6 +156,68 @@ class MetricTests(SimpleTestCase):
         self.assertIsNone(summary["hit_rate@5"])
         self.assertEqual(summary["rejection_accuracy"], 1.0)
 
+    def test_precision_is_the_share_of_returned_hits_on_topic(self):
+        """One right passage among four returned scores a hit, but only 0.25 precision."""
+        rows, summary = self.evaluate(
+            [{"query": "q", "relevant": ["a.txt"], "kind": "paraphrase"}],
+            {"q": [hit("a.txt"), hit("x.txt"), hit("y.txt"), hit("z.txt")]},
+        )
+
+        self.assertEqual(rows[0]["precision"], 0.25)
+        self.assertEqual(summary["hit_rate@5"], 1.0)
+        self.assertEqual(summary["precision@5"], 0.25)
+
+    def test_precision_counts_every_chunk_not_every_document(self):
+        """Two chunks of the relevant document and one of another is 2/3."""
+        rows, _ = self.evaluate(
+            [{"query": "q", "relevant": ["a.txt"], "kind": "paraphrase"}],
+            {"q": [hit("a.txt", chunk_idx=0), hit("a.txt", chunk_idx=1), hit("z.txt")]},
+        )
+
+        self.assertAlmostEqual(rows[0]["precision"], 2 / 3)
+
+    def test_precision_is_zero_when_nothing_is_returned_for_an_answerable_query(self):
+        rows, summary = self.evaluate(
+            [{"query": "q", "relevant": ["a.txt"], "kind": "paraphrase"}],
+            {"q": []},
+        )
+
+        self.assertEqual(rows[0]["precision"], 0.0)
+        self.assertEqual(summary["precision@5"], 0.0)
+
+    def test_precision_is_none_for_unanswerable_queries_and_left_out_of_the_mean(self):
+        rows, summary = self.evaluate(
+            [
+                {"query": "answerable", "relevant": ["a.txt"], "kind": "paraphrase"},
+                {"query": "nonsense", "relevant": [], "kind": "off_topic"},
+            ],
+            {"answerable": [hit("a.txt"), hit("z.txt")], "nonsense": [hit("a.txt")]},
+        )
+
+        self.assertEqual(rows[0]["precision"], 0.5)
+        self.assertIsNone(rows[1]["precision"])
+        self.assertEqual(summary["precision@5"], 0.5)
+        self.assertIsNone(summary["by_kind"]["off_topic"]["precision"])
+
+    def test_precision_is_broken_down_by_kind(self):
+        _, summary = self.evaluate(
+            [
+                {"query": "p", "relevant": ["a.txt"], "kind": "paraphrase"},
+                {"query": "l", "relevant": ["b.txt"], "kind": "lexical"},
+            ],
+            {"p": [hit("a.txt")], "l": [hit("b.txt"), hit("x.txt"), hit("y.txt"), hit("z.txt")]},
+        )
+
+        self.assertEqual(summary["by_kind"]["paraphrase"]["precision"], 1.0)
+        self.assertEqual(summary["by_kind"]["lexical"]["precision"], 0.25)
+        self.assertEqual(summary["precision@5"], 0.625)
+
+    def test_precision_is_none_when_there_are_no_answerable_queries(self):
+        _, summary = self.evaluate([{"query": "q", "relevant": [], "kind": "off_topic"}], {})
+
+        self.assertIsNone(summary["precision@5"])
+        self.assertEqual(format_metric(summary["precision@5"]), "n/a")
+
 
 class EvaluationSetIntegrityTests(SimpleTestCase):
     """The labelled set is data, and wrong data silently miscalibrates everything."""

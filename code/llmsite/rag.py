@@ -1049,8 +1049,14 @@ class RagIndex:
             self._bm25 = BM25(self.documents)
         return self._bm25
 
-    def dense_search(self, query, limit, min_score=MIN_SCORE):
-        """Cosine nearest neighbours. Returns [(document index, similarity)]."""
+    def dense_candidates(self, query, limit, min_score=MIN_SCORE):
+        """Every cosine neighbour that clears the floor, best first.
+
+        Returns [(document index, similarity)]. This is the floored list
+        before any relative pruning, because retrieve needs both views of it:
+        the pruned list for ranking, and the full set of passages that cleared
+        the floor, which is what the sparse leg is allowed to draw from.
+        """
         import faiss
 
         query_vec = self.get_embedder().encode([query], convert_to_numpy=True).astype("float32")
@@ -1065,7 +1071,11 @@ class RagIndex:
             if float(score) >= min_score:
                 found.append((int(index), float(score)))
 
-        return prune_to_best(found, RELATIVE_CUTOFF)
+        return found
+
+    def dense_search(self, query, limit, min_score=MIN_SCORE):
+        """Cosine nearest neighbours. Returns [(document index, similarity)]."""
+        return prune_to_best(self.dense_candidates(query, limit, min_score), RELATIVE_CUTOFF)
 
     def retrieve(self, query, top_k=TOP_K, min_score=MIN_SCORE):
         """
@@ -1081,17 +1091,24 @@ class RagIndex:
         passage ranked seventh by one ranker and second by the other should be
         able to win, and it cannot if the pool is cut to five first.
 
-        Returns an empty list when nothing relevant exists: the dense leg is
-        floored at min_score and the sparse leg scores nothing for a query that
-        shares no term with the corpus.
+        The cosine floor applies to every passage that comes back, not just to
+        the dense leg. The sparse leg is restricted to passages that cleared
+        the floor, so it can re-rank them, or re-admit one that the relative
+        cutoff pruned (an exact-term question), but it can never introduce a
+        passage the embedding judged off-topic. Returns an empty list when
+        nothing clears the floor.
+
+        The `score` on each chunk is the fused rank value (roughly 0.016 to
+        0.033), not a similarity. It orders results and nothing else, so
+        nothing downstream should compare it with MIN_SCORE.
         """
         if not self.documents:
             return []
 
         pool = max(top_k * CANDIDATE_MULTIPLIER, MIN_CANDIDATES)
 
-        dense = self.dense_search(query, pool, min_score)
-        if not dense:
+        floored = self.dense_candidates(query, pool, min_score)
+        if not floored:
             # The dense leg decides *whether* the corpus has an answer; the two
             # legs together decide *which* passages. Sparse matching cannot make
             # that first call: "what is the capital of France" shares "of" with
@@ -1100,7 +1117,20 @@ class RagIndex:
             # back with whatever stopwords it happened to collide with.
             return []
 
-        sparse = self.get_bm25().search(query, pool)
+        # The gate alone was not enough. Once one passage cleared the floor,
+        # the sparse list was fused in unfiltered, and the remaining slots
+        # filled with chunks that only share filler words ("what", "is", "the",
+        # "of") with the query. So the floor is carried through: the sparse
+        # leg may only rank passages that cleared it. A passage that cleared
+        # the floor but fell to the relative cutoff can still come back on a
+        # strong keyword match, which is the point of having a sparse leg.
+        cleared = {index for index, _ in floored}
+        dense = prune_to_best(floored, RELATIVE_CUTOFF)
+        sparse = [
+            (index, score)
+            for index, score in self.get_bm25().search(query, pool)
+            if index in cleared
+        ]
 
         fused = reciprocal_rank_fusion(
             [[index for index, _ in dense], [index for index, _ in sparse]]
