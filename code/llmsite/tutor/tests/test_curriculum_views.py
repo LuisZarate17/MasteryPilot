@@ -13,7 +13,9 @@ files.
 import os
 import shutil
 import tempfile
+from unittest import mock
 
+from django.contrib.messages import get_messages
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import reverse
@@ -33,6 +35,12 @@ class CurriculumInvalidationTests(MasteryPilotTestCase):
         # Drop the instance attribute rather than reassigning, so the class
         # method is reachable again afterwards.
         self.addCleanup(rag.default_index.__dict__.pop, "invalidate", None)
+
+        # The rebuild after a change needs an embedder, which the test run has
+        # not got; the real one is exercised in test_rag.
+        patcher = mock.patch.object(rag, "ensure_curriculum_loaded")
+        self.rebuild = patcher.start()
+        self.addCleanup(patcher.stop)
 
         self.client.force_login(self.make_admin())
 
@@ -134,3 +142,59 @@ class CurriculumInvalidationTests(MasteryPilotTestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "new.txt")))
+
+    def levels_and_texts(self, response):
+        return [(m.level_tag, str(m)) for m in get_messages(response.wsgi_request)]
+
+    def test_uploading_a_document_rebuilds_the_index_for_the_curriculum_root(self):
+        upload = SimpleUploadedFile("new.txt", b"Fractions divide a whole.", content_type="text/plain")
+
+        self.post("upload_curriculum", {"title": "Fractions", "file": upload})
+
+        self.rebuild.assert_called_once_with(self.tmp)
+
+    def test_deleting_a_document_rebuilds_the_index_for_the_curriculum_root(self):
+        self.write("doomed.txt")
+
+        self.post("curriculum_delete", {"filename": "doomed.txt"})
+
+        self.rebuild.assert_called_once_with(self.tmp)
+
+    def test_a_rejected_upload_does_not_rebuild(self):
+        upload = SimpleUploadedFile("script.exe", b"MZ", content_type="application/octet-stream")
+
+        self.post("upload_curriculum", {"title": "bad", "file": upload})
+
+        self.rebuild.assert_not_called()
+
+    def test_a_failed_rebuild_does_not_fail_the_upload_and_says_so(self):
+        self.rebuild.side_effect = RuntimeError("embedder would not load")
+        upload = SimpleUploadedFile("new.txt", b"content", content_type="text/plain")
+
+        with self.assertLogs("tutor.views.curriculum", level="WARNING"):
+            response = self.post("upload_curriculum", {"title": "t", "file": upload})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "new.txt")))
+        found = self.levels_and_texts(response)
+        self.assertEqual([level for level, _ in found], ["success", "warning"])
+        self.assertEqual(found[0][1], "Uploaded new.txt.")
+        self.assertIn("search index could not be updated", found[1][1])
+
+    def test_a_failed_rebuild_does_not_fail_the_delete_and_says_so(self):
+        path = self.write("doomed.txt")
+        self.rebuild.side_effect = RuntimeError("embedder would not load")
+
+        with self.assertLogs("tutor.views.curriculum", level="WARNING"):
+            response = self.post("curriculum_delete", {"filename": "doomed.txt"})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(os.path.exists(path))
+        self.assertEqual([level for level, _ in self.levels_and_texts(response)], ["warning"])
+
+    def test_a_good_rebuild_adds_no_warning(self):
+        upload = SimpleUploadedFile("new.txt", b"content", content_type="text/plain")
+
+        response = self.post("upload_curriculum", {"title": "t", "file": upload})
+
+        self.assertEqual([level for level, _ in self.levels_and_texts(response)], ["success"])

@@ -57,25 +57,38 @@ def _declared_type(uploaded):
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
-def _invalidate_rag_index():
-    """Tell the retrieval index the curriculum changed.
+_INDEX_NOT_UPDATED = (
+    "The tutor's search index could not be updated; it will be rebuilt when "
+    "the next chat starts."
+)
+
+
+def _refresh_rag_index():
+    """Rebuild the retrieval index after the curriculum changed.
+
+    Returns True when the index now matches the folder and False when it could
+    not be updated; it never raises, because the file change itself has
+    already happened and must not be reported as a failure.
+
+    The rebuild is slow (tens of seconds for the textbook), so it is done here,
+    in the request of the staff member who changed the curriculum, rather than
+    in the first student's "New session". Opening a session still re-checks the
+    folder, which is what catches a server restart or a rebuild that failed
+    here. invalidate() comes first so the rebuild cannot be skipped as current.
 
     Imported here rather than at module scope: rag is import-safe, but this
     keeps the dependency visible at the two call sites that create it.
-
-    Without this, a document deleted through the dashboard went on being
-    retrieved and quoted to students. The index re-checks the corpus when a
-    chat session opens, so this is not the only thing standing between a
-    deletion and its taking effect — but it is what makes the two explicitly
-    connected rather than accidentally so.
     """
     try:
         import rag
 
         rag.invalidate()
-    except Exception as exc:  # pragma: no cover - never block the upload
+        rag.ensure_curriculum_loaded(str(settings.CURRICULUM_ROOT))
+    except Exception as exc:
         # The RAG stack is optional; the dashboard must work without it.
-        logger.warning("Could not invalidate the RAG index: %s", exc)
+        logger.warning("Could not rebuild the RAG index: %s", exc)
+        return False
+    return True
 
 
 @login_required
@@ -105,7 +118,8 @@ def curriculum_delete(request):
 
     if os.path.exists(path):
         os.remove(path)
-        _invalidate_rag_index()
+        if not _refresh_rag_index():
+            messages.warning(request, _INDEX_NOT_UPDATED)
 
     return redirect("dashboard")
 
@@ -168,11 +182,13 @@ def upload_curriculum(request):
         for chunk in file.chunks():
             dest.write(chunk)
 
-    _invalidate_rag_index()
+    index_updated = _refresh_rag_index()
 
     messages.success(
         request, f"Replaced {safe_name}." if replacing else f"Uploaded {safe_name}."
     )
+    if not index_updated:
+        messages.warning(request, _INDEX_NOT_UPDATED)
     return redirect("dashboard")
 
 

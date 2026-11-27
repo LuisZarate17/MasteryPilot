@@ -13,6 +13,8 @@ import json
 import logging
 import random
 import re
+import threading
+import time
 import uuid
 
 from ..models import Chat as DBChat, Quiz, QuizAnswer, Session
@@ -37,6 +39,11 @@ model = None
 
 tokenizer = None
 
+# Serialises the model load; a failed load is not retried for this long.
+INIT_RETRY_SECONDS = 60
+_init_lock = threading.Lock()
+_init_failed_at = None
+
 
 def _adapter():
     """The LLM adapter for settings.LLM_MODULE.
@@ -60,16 +67,30 @@ def _derive_session_title(first_message: str) -> str:
 def ensure_llm_initialized():
     """Load the model and tokenizer if they are not loaded yet.
 
-    Safe to call multiple times. Leaves both None on failure so callers can
-    return "Model unavailable" rather than raising.
+    Safe to call multiple times and from several threads: the load runs under
+    a lock, so concurrent first requests share one copy of the weights. Leaves
+    both None on failure so callers can return "Model unavailable" rather than
+    raising, and does not try again for INIT_RETRY_SECONDS so a machine that
+    cannot load the model does not repeat the attempt on every request.
     """
-    global model, tokenizer
-    if model is None or tokenizer is None:
+    global model, tokenizer, _init_failed_at
+    if model is not None and tokenizer is not None:
+        return
+    with _init_lock:
+        if model is not None and tokenizer is not None:
+            return
+        if (
+            _init_failed_at is not None
+            and time.monotonic() - _init_failed_at < INIT_RETRY_SECONDS
+        ):
+            return
         try:
             model, tokenizer = _adapter().init_model()
+            _init_failed_at = None
         except Exception:
             logger.exception("Failed to initialise the local model")
             model = tokenizer = None
+            _init_failed_at = time.monotonic()
 
 
 def _is_bootstrap_user_message(text: str) -> bool:
@@ -499,7 +520,6 @@ def _maybe_persist_quiz(session, assistant_reply_text):
 def chat_page(request):
     if is_teacher_or_admin(request.user):
         return redirect("dashboard")
-    ensure_llm_initialized()
     return render(request, "chat.html")
 
 

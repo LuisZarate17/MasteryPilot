@@ -15,8 +15,14 @@ from dataclasses import dataclass
 import logging
 import os
 import re
+import threading
 
 logger = logging.getLogger(__name__)
+
+# There is one model on one GPU: generate calls from concurrent request
+# threads contend for its memory and are not documented as thread-safe, so
+# they take turns.
+_GENERATE_LOCK = threading.Lock()
 
 # The curriculum directory is settings.CURRICULUM_ROOT, read lazily in
 # load_curriculum. It used to be a module constant pointing one level deeper
@@ -643,7 +649,7 @@ class Adapter:
         if spec.top_k is not None:
             gen_kwargs["top_k"] = spec.top_k
 
-        with torch.inference_mode():
+        with _GENERATE_LOCK, torch.inference_mode():
             outputs = model.generate(**inputs, **gen_kwargs)
 
         # Slice off the prompt so only the new tokens are decoded — the reason

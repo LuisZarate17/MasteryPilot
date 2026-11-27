@@ -13,6 +13,7 @@ arithmetic under test is the threshold and sentinel handling, not FAISS.
 import json
 import os
 import tempfile
+import threading
 import unittest.mock as mock
 
 from django.test import SimpleTestCase
@@ -1122,21 +1123,26 @@ class EnsureCurriculumLoadedTests(RagTestCase):
             self._patch(name)
 
     def _patch(self, name):
-        """Patch on the instance: these are methods, so ensure_curriculum_loaded
+        """Patch on the class: these are methods, so ensure_curriculum_loaded
         reaches them through self, not through the module namespace.
+
+        On the class rather than the instance because _rebuild builds the new
+        corpus in a scratch RagIndex, which an instance patch would not reach.
 
         The fake loader also indexes one chunk, as a real load of a corpus with
         a file in it would; _rebuild refuses to save when files exist but
         nothing was indexed.
         """
-        def fake(*a, _n=name, **k):
+        def fake(index, *a, _n=name, **k):
             self.calls.append(_n)
             if _n == "load_curriculum_folder":
-                rag.default_index.documents.append(
+                index.documents.append(
                     {"text": "indexed", "source": "new.txt", "chunk_idx": 0}
                 )
 
-        setattr(rag.default_index, name, fake)
+        patcher = mock.patch.object(rag.RagIndex, name, fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_a_repeat_call_on_an_unchanged_corpus_does_no_work(self):
         """Replaces a test that asserted a latch which never cleared.
@@ -1185,13 +1191,11 @@ class EnsureCurriculumLoadedTests(RagTestCase):
         def explode(*_args, **_kwargs):
             raise RuntimeError("corrupt PDF")
 
-        rag.default_index.load_curriculum_folder = explode
-
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(RuntimeError):
-                rag.ensure_curriculum_loaded(tmp)
+            with mock.patch.object(rag.RagIndex, "load_curriculum_folder", explode):
+                with self.assertRaises(RuntimeError):
+                    rag.ensure_curriculum_loaded(tmp)
 
-            self._patch("load_curriculum_folder")
             rag.ensure_curriculum_loaded(tmp)
 
         self.assertIn("load_curriculum_folder", self.calls)
@@ -1800,15 +1804,14 @@ class OneBadFileTests(RagTestCase):
         """A total failure (the embedder will not load) must be retried, not persisted."""
         index = rag.default_index
 
-        def add(chunks):
+        def add(_index, chunks):
             raise RuntimeError("embedder failed")
-
-        index.add_documents = add
 
         with tempfile.TemporaryDirectory() as tmp:
             self.write(tmp, "a.txt", "Fractions divide a whole.")
             self.write(tmp, "b.txt", "A numerator sits on top.")
-            with mock.patch.object(index, "save_index") as save, \
+            with mock.patch.object(rag.RagIndex, "add_documents", add), \
+                    mock.patch.object(index, "save_index") as save, \
                     self.assertLogs("rag", level="WARNING"):
                 with self.assertRaises(RuntimeError):
                     index._rebuild(tmp)
@@ -1833,11 +1836,14 @@ class OneBadFileTests(RagTestCase):
         index.documents = [{"text": "stale", "source": "old.txt"}]
         index.index = object()
         # Index for real, so the failure under test is the save, not an empty load.
-        index.add_documents = lambda chunks: index.documents.extend(chunks)
+        # On the class: the corpus is built in a scratch RagIndex.
+        def add(target, chunks):
+            target.documents.extend(chunks)
 
         with tempfile.TemporaryDirectory() as tmp:
             self.write(tmp, "a.txt", "Fractions divide a whole.")
-            with mock.patch.object(index, "save_index", side_effect=OSError("disk full")):
+            with mock.patch.object(rag.RagIndex, "add_documents", add), \
+                    mock.patch.object(index, "save_index", side_effect=OSError("disk full")):
                 with self.assertRaises(OSError):
                     index._rebuild(tmp)
 
@@ -1958,3 +1964,201 @@ class FlooredHybridRetrievalTests(RagTestCase):
         self.assertEqual(found, rag.prune_to_best([(0, 0.9), (1, 0.8), (2, 0.5)], rag.RELATIVE_CUTOFF))
         self.assertEqual(found, [(0, 0.9), (1, 0.8)])
         stub.assert_called_once_with("q", 10, 0.4)
+
+
+class RebuildThreadingTests(RagTestCase):
+    """A rebuild builds aside and swaps; nothing reads or doubles a half-built corpus.
+
+    The build itself is stubbed at the class, because _rebuild fills a scratch
+    RagIndex: load_curriculum_folder stands in for the slow embedding, and
+    dense_candidates for the vector search. What is under test is the locking.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.corpus = os.path.join(self.tmp.name, "curriculum")
+        os.makedirs(self.corpus)
+        # A supported file, so an empty build counts as a failed one.
+        with open(os.path.join(self.corpus, "a.txt"), "w", encoding="utf-8") as handle:
+            handle.write("Fractions divide a whole.")
+
+        self.index = rag.default_index
+        self.index.index_path = os.path.join(self.tmp.name, "i.faiss")
+        self.index.docs_path = rag.sidecar_path_for(self.index.index_path)
+
+        self.loads = 0
+        self.saved_counts = []
+        self.build = self.default_build
+        self.stub("is_index_stale", lambda index, *a, **k: True)
+        self.stub("_maybe_upgrade_to_ivf", lambda index: None)
+        self.stub("save_index", lambda index, manifest=None: self.saved_counts.append(len(index.documents)))
+        self.stub("load_curriculum_folder", lambda scratch, path: self.load(scratch))
+        self.stub("dense_candidates", self.every_document)
+
+    def stub(self, name, replacement):
+        patcher = mock.patch.object(rag.RagIndex, name, replacement)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def load(self, scratch):
+        self.loads += 1
+        self.build(scratch)
+
+    @staticmethod
+    def default_build(scratch):
+        scratch.documents.extend(doc(f"new topic {n}", idx=n) for n in range(10))
+
+    @staticmethod
+    def every_document(index, query, limit, min_score=rag.MIN_SCORE):
+        return [(n, 0.9 - 0.001 * n) for n in range(min(limit, len(index.documents)))]
+
+    def in_thread(self, target):
+        errors = []
+
+        def run():
+            try:
+                target()
+            except Exception as exc:  # reported by the test, not lost in the thread
+                errors.append(exc)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        return thread, errors
+
+    def test_two_concurrent_loads_build_the_corpus_once(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_build(scratch):
+            entered.set()
+            release.wait(timeout=5)
+            self.default_build(scratch)
+
+        self.build = slow_build
+        first, first_errors = self.in_thread(lambda: self.index.ensure_curriculum_loaded(self.corpus))
+        self.assertTrue(entered.wait(timeout=5))
+        second, second_errors = self.in_thread(lambda: self.index.ensure_curriculum_loaded(self.corpus))
+        # Long enough for the second caller to start a second build if it could.
+        second.join(timeout=0.3)
+        release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(first_errors + second_errors, [])
+        self.assertEqual(self.loads, 1)
+        self.assertEqual(len(self.index.documents), 10)
+        self.assertEqual(self.saved_counts, [10])
+        self.assertIsNotNone(self.index._loaded_manifest)
+
+    def test_a_search_during_a_rebuild_sees_the_old_corpus_whole_then_the_new_one(self):
+        self.index.documents = [doc(f"old topic {n}", idx=n) for n in range(3)]
+        halfway = threading.Event()
+        release = threading.Event()
+
+        def slow_build(scratch):
+            scratch.documents.append(doc("new topic 0"))
+            halfway.set()
+            release.wait(timeout=5)
+            scratch.documents.extend(doc(f"new topic {n}", idx=n) for n in range(1, 4))
+
+        self.build = slow_build
+        builder, build_errors = self.in_thread(
+            lambda: self.index.ensure_curriculum_loaded(self.corpus)
+        )
+        self.assertTrue(halfway.wait(timeout=5))
+
+        during = []
+        searcher, search_errors = self.in_thread(
+            lambda: during.extend(self.index.retrieve("topic", top_k=10))
+        )
+        searcher.join(timeout=5)
+        self.assertFalse(searcher.is_alive(), "a search waited for the rebuild")
+        release.set()
+        builder.join(timeout=5)
+
+        self.assertEqual(build_errors + search_errors, [])
+        self.assertEqual(sorted(chunk["text"] for chunk in during),
+                         ["old topic 0", "old topic 1", "old topic 2"])
+        after = self.index.retrieve("topic", top_k=10)
+        self.assertEqual(sorted(chunk["text"] for chunk in after),
+                         [f"new topic {n}" for n in range(4)])
+
+    def test_a_swap_waits_for_a_search_already_in_flight(self):
+        """The other half of the swap: a search reads one corpus from start to end.
+
+        The search is paused after it has started; a rebuild finishing in the
+        meantime must not replace the corpus under it.
+        """
+        self.index.documents = [doc(f"old topic {n}", idx=n) for n in range(3)]
+        in_search = threading.Event()
+        release = threading.Event()
+
+        def paused_search(index, query, limit, min_score=rag.MIN_SCORE):
+            in_search.set()
+            release.wait(timeout=5)
+            return self.every_document(index, query, limit, min_score)
+
+        found = []
+        with mock.patch.object(rag.RagIndex, "dense_candidates", paused_search):
+            searcher, search_errors = self.in_thread(
+                lambda: found.extend(self.index.retrieve("topic", top_k=10))
+            )
+            self.assertTrue(in_search.wait(timeout=5))
+            builder, build_errors = self.in_thread(
+                lambda: self.index.ensure_curriculum_loaded(self.corpus)
+            )
+            # Long enough for the rebuild to swap, if it did not have to wait.
+            builder.join(timeout=0.3)
+            served_while_searching = len(self.index.documents)
+            release.set()
+            searcher.join(timeout=5)
+            builder.join(timeout=5)
+
+        self.assertFalse(searcher.is_alive() or builder.is_alive())
+        self.assertEqual(build_errors + search_errors, [])
+        self.assertEqual(served_while_searching, 3)
+        self.assertEqual(sorted(chunk["text"] for chunk in found),
+                         ["old topic 0", "old topic 1", "old topic 2"])
+        self.assertEqual(len(self.index.documents), 10)
+
+    def test_a_failed_rebuild_is_retried_by_the_next_call(self):
+        def broken_build(scratch):
+            scratch.documents.append(doc("half built"))
+            raise RuntimeError("corrupt PDF")
+
+        self.index.documents = [doc("old topic 0")]
+        self.build = broken_build
+        with self.assertRaises(RuntimeError):
+            self.index.ensure_curriculum_loaded(self.corpus)
+
+        # Nothing half-built is served, and the failure is not remembered as done.
+        self.assertEqual(self.index.documents, [])
+        self.assertIsNone(self.index.index)
+        self.assertIsNone(self.index._loaded_manifest)
+        self.assertEqual(self.saved_counts, [])
+
+        self.build = self.default_build
+        self.index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertEqual(self.loads, 2)
+        self.assertEqual(len(self.index.documents), 10)
+        self.assertEqual(self.saved_counts, [10])
+        self.assertIsNotNone(self.index._loaded_manifest)
+
+    def test_an_unchanged_corpus_is_not_rebuilt_by_a_later_call(self):
+        self.index.ensure_curriculum_loaded(self.corpus)
+        self.index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertEqual(self.loads, 1)
+
+    def test_invalidate_makes_the_next_call_rebuild(self):
+        self.index.ensure_curriculum_loaded(self.corpus)
+        self.index.invalidate()
+        self.index.ensure_curriculum_loaded(self.corpus)
+
+        self.assertEqual(self.loads, 2)
+        self.assertEqual(len(self.index.documents), 10)

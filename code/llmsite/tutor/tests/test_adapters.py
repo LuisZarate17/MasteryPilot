@@ -11,11 +11,13 @@ not installed and there is no GPU, so no model has ever been loaded on this
 machine — see the live-generation note in CLEANUP_PLAN.md.
 """
 
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
 import sys
 import textwrap
+import threading
 import unittest.mock as mock
 
 from django.conf import settings
@@ -936,3 +938,105 @@ class SendMessageTrimmingTests(SimpleTestCase):
             {"role": "assistant", "content": "reply"},
         ])
         self.assertEqual(len(returned), len(before) + 2)
+
+
+class GenerateLockTests(SimpleTestCase):
+    """_generate lets one request at a time into model.generate.
+
+    There is one model on one GPU, and concurrent generate calls are not
+    documented as thread-safe. torch is not installed here, so a stand-in
+    module supplies the only thing _generate takes from it.
+    """
+
+    class Inputs(dict):
+        def to(self, _device):
+            return self
+
+    class FakeTokenizer:
+        eos_token_id = 1
+        pad_token_id = 0
+        model_max_length = 4096
+
+        def apply_chat_template(self, messages, **kwargs):
+            return "PROMPT"
+
+        def __call__(self, text, **kwargs):
+            return GenerateLockTests.Inputs(input_ids=SimpleNamespace(shape=(1, 3)))
+
+        def decode(self, ids, skip_special_tokens=True):
+            return " reply "
+
+    class FakeModel:
+        device = "cpu"
+
+        def __init__(self, on_generate):
+            self.on_generate = on_generate
+
+        def generate(self, **kwargs):
+            self.on_generate()
+            return [[7, 7, 7, 8, 9]]
+
+    def setUp(self):
+        fake_torch = SimpleNamespace(inference_mode=lambda: nullcontext())
+        patcher = mock.patch.dict(sys.modules, {"torch": fake_torch})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def generate(self, model):
+        return get_adapter("qwen")._generate(
+            model, self.FakeTokenizer(), [{"role": "user", "content": "hi"}]
+        )
+
+    def test_the_lock_is_held_while_the_model_generates(self):
+        held = []
+        model = self.FakeModel(lambda: held.append(languagemodel._GENERATE_LOCK.locked()))
+
+        self.assertEqual(self.generate(model), "reply")
+
+        self.assertEqual(held, [True])
+        self.assertFalse(languagemodel._GENERATE_LOCK.locked())
+
+    def test_the_lock_is_released_when_generation_fails(self):
+        def explode():
+            raise RuntimeError("out of memory")
+
+        with self.assertRaises(RuntimeError):
+            self.generate(self.FakeModel(explode))
+
+        self.assertFalse(languagemodel._GENERATE_LOCK.locked())
+
+    def test_two_requests_never_generate_at_the_same_time(self):
+        counter = threading.Lock()
+        inside = 0
+        most = 0
+        first_in = threading.Event()
+        release = threading.Event()
+
+        def generate_slowly():
+            nonlocal inside, most
+            with counter:
+                inside += 1
+                most = max(most, inside)
+            first_in.set()
+            release.wait(timeout=5)
+            with counter:
+                inside -= 1
+
+        model = self.FakeModel(generate_slowly)
+        results = []
+        threads = [
+            threading.Thread(target=lambda: results.append(self.generate(model)))
+            for _ in range(2)
+        ]
+        threads[0].start()
+        self.assertTrue(first_in.wait(timeout=5))
+        threads[1].start()
+        # Long enough for the second thread to get into generate if it could.
+        threads[1].join(timeout=0.3)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(results, ["reply", "reply"])
+        self.assertEqual(most, 1)
