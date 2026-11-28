@@ -118,9 +118,17 @@
     const text = chatInput.value.trim();
     if (!text) return;
 
-    appendMessage("user", text);
+    const userBubble = appendMessage("user", text);
     chatInput.value = "";
     await showTypingAlert();
+
+    // A failed reply is not saved server-side, so put the message back in the
+    // box for a retry (unless the student has typed something since) and drop
+    // its bubble so the retry does not show it twice.
+    const restoreMessage = () => {
+      if (userBubble) userBubble.remove();
+      if (!chatInput.value) chatInput.value = text;
+    };
 
     try {
       const res = await fetch("{% url 'api_chat' %}", {
@@ -137,6 +145,7 @@
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
+      if (data.error) restoreMessage();
 
       if (data.session_title && currentSessionId) {
         const titleEl = document.querySelector(
@@ -154,6 +163,7 @@
         appendMessage("model", data.model_text || "(no text)");
       }
     } catch (err) {
+      restoreMessage();
       appendMessage("model", "Error: " + err.message);
     }
 
@@ -402,6 +412,7 @@
     }
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
+    return div;
   }
 
   function formatTeacherMessage(text, quizAttempt) {

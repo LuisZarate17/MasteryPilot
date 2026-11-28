@@ -367,11 +367,16 @@ def pending_question(reply: str) -> str:
     return question
 
 
-def build_ledger_message(ledger, waiting_on: str = "") -> str:
-    """The conversation-state block handed to the model, or "" when empty."""
+def build_ledger_message(ledger, waiting_on: str = "", quiz_result: str = "") -> str:
+    """The conversation-state block handed to the model, or "" when empty.
+
+    *quiz_result* is a plain-text summary of the quiz the student has just
+    submitted, so the tutor can speak to the score it never otherwise sees.
+    """
     entries = [e for e in (ledger or []) if e]
     waiting_on = (waiting_on or "").strip()
-    if not entries and not waiting_on:
+    quiz_result = (quiz_result or "").strip()
+    if not entries and not waiting_on and not quiz_result:
         return ""
 
     parts = []
@@ -393,6 +398,8 @@ def build_ledger_message(ledger, waiting_on: str = "") -> str:
             "them answer it by naming the specific operation to perform. Do "
             "not ask this question again in the same words."
         )
+    if quiz_result:
+        parts.append(quiz_result)
     parts.append(
         "If the student has moved to a different problem, ignore all of the "
         "above and start the new problem at its first step."
@@ -687,12 +694,13 @@ class Adapter:
         return assistant_text, messages
 
     def send_message(self, model, tokenizer, messages, new_message, ledger=None,
-                     waiting_on=None):
+                     waiting_on=None, quiz_result=None):
         """Answer one student message. Returns (assistant_text, messages).
 
-        *ledger* is the steps already taught in this session and *waiting_on*
-        the question the tutor last asked and has not had answered (see
-        build_ledger_message). Both optional: callers without them behave
+        *ledger* is the steps already taught in this session, *waiting_on*
+        the question the tutor last asked and has not had answered, and
+        *quiz_result* a summary of the quiz the student has just submitted (see
+        build_ledger_message). All optional: callers without them behave
         exactly as before.
         """
         from rag import build_rag_system_message, build_retrieval_query, retrieve
@@ -734,7 +742,7 @@ class Adapter:
         preamble = "\n\n".join(
             part for part in (
                 f"{RAG_INSTRUCTION}\n\n{context_text}" if context_text else "",
-                build_ledger_message(ledger, waiting_on),
+                build_ledger_message(ledger, waiting_on, quiz_result or ""),
             ) if part
         )
 

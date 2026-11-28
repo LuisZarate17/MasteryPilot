@@ -161,6 +161,7 @@ class FakeAdapter:
         self.derive_title_calls = []
         self.ledgers_seen = []
         self.waiting_on_seen = []
+        self.quiz_results_seen = []
 
     def init_model(self):
         return object(), object()
@@ -182,7 +183,7 @@ class FakeAdapter:
         return self._greeting, messages
 
     def send_message(self, model, tokenizer, messages, new_message, ledger=None,
-                     waiting_on=None):
+                     waiting_on=None, quiz_result=None):
         # The tutor's rules are the first row of every real conversation; a code
         # path that reaches the model without them is a bug.
         if not messages or messages[0].get("role") != "system":
@@ -192,6 +193,7 @@ class FakeAdapter:
         # ignored so a test can assert both reach the adapter.
         self.ledgers_seen.append(list(ledger or []))
         self.waiting_on_seen.append(waiting_on or "")
+        self.quiz_results_seen.append(quiz_result or "")
         updated = list(messages) + [
             {"role": "user", "content": new_message},
             {"role": "assistant", "content": self._reply},

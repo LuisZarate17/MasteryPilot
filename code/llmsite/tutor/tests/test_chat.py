@@ -17,10 +17,13 @@ from unittest.mock import patch
 from django.urls import reverse
 import json
 import threading
+from pathlib import Path
 
 from ..views import chat
 from ..models import Chat as DBChat, Quiz, Session
-from ..views.chat import _has_student_message, _is_bootstrap_user_message
+from ..views.chat import (
+    _has_student_message, _is_bootstrap_user_message, _looks_like_topic_change,
+)
 from .base import FakeAdapter, MasteryPilotTestCase
 
 
@@ -366,7 +369,8 @@ class ChatTests(MasteryPilotTestCase):
         class Repeating(FakeAdapter):
             """Stalls first, helps when nudged."""
 
-            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None):
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None,
+                             quiz_result=None):
                 self.send_message_calls.append(new_message)
                 self.ledgers_seen.append(list(ledger or []))
                 self.waiting_on_seen.append(waiting_on or "")
@@ -394,7 +398,8 @@ class ChatTests(MasteryPilotTestCase):
         )
 
         class Stubborn(FakeAdapter):
-            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None):
+            def send_message(self, model, tokenizer, messages, new_message, ledger=None, waiting_on=None,
+                             quiz_result=None):
                 self.send_message_calls.append(new_message)
                 self.ledgers_seen.append(list(ledger or []))
                 self.waiting_on_seen.append(waiting_on or "")
@@ -474,7 +479,7 @@ class ChatTests(MasteryPilotTestCase):
             .order_by("created_at", "id")
             .values_list("role", flat=True)
         )
-        self.assertEqual(roles[3:], ["user"])  # after the three bootstrap rows
+        self.assertEqual(roles[3:], [])  # a failed reply saves nothing
 
     def test_a_quiz_reply_is_captured_as_an_active_quiz(self):
         quiz = '{"test": {"q1": {"question": "2+2?", "answers": ["4"], "correct": "0"}}}'
@@ -642,7 +647,7 @@ class RepeatedQuizRegenerationTests(MasteryPilotTestCase):
 
         class Scripted(FakeAdapter):
             def send_message(self, model, tokenizer, messages, new_message,
-                             ledger=None, waiting_on=None):
+                             ledger=None, waiting_on=None, quiz_result=None):
                 self.send_message_calls.append(new_message)
                 self.ledgers_seen.append(list(ledger or []))
                 index = min(len(self.send_message_calls) - 1, len(replies) - 1)
@@ -854,3 +859,273 @@ class LazyModelLoadTests(MasteryPilotTestCase):
         adapter.init_model.assert_not_called()
         adapter.start_chat.assert_not_called()
         self.assertFalse(Session.objects.filter(owner=student).exists())
+
+
+def _quiz_text(test):
+    return json.dumps({"test": test})
+
+
+class QuizResultHandoffTests(MasteryPilotTestCase):
+    """Grading writes no Chat row, so the tutor is told the score on the next turn."""
+
+    def setUp(self):
+        self.student = self.make_student("quiz_result_student")
+        self.client.force_login(self.student)
+        self.session = self.make_session(self.student)
+        self.set_active_session(self.session)
+        self.bootstrap_session(self.session)
+
+    def send(self, message="How did I do?"):
+        return self.client.post(
+            reverse("api_chat"),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def give_quiz(self, status="active"):
+        test = {
+            "q1": self.mc_question("What is 2 + 2?", ["4", "5", "6", "7"], "0"),
+            "q2": self.mc_question("What is 3 + 4?", ["5", "6", "7", "8"], "2"),
+        }
+        self.make_chat(self.session, "assistant", _quiz_text(test))
+        return self.make_quiz(self.session, test, status=status)
+
+    def grade(self, answers):
+        return self.client.post(
+            reverse("api_grade_quiz"),
+            data=json.dumps({"answers": answers}),
+            content_type="application/json",
+        )
+
+    def test_the_score_and_the_missed_question_reach_the_tutor(self):
+        self.give_quiz()
+        self.assertEqual(self.grade({"q1": "1", "q2": "2"}).status_code, 200)
+
+        adapter = FakeAdapter()
+        with LoadedModel(adapter):
+            self.send()
+
+        result = adapter.quiz_results_seen[0]
+        self.assertIn("1 of 2", result)
+        self.assertNotIn("1.0", result)
+        self.assertIn("What is 3 + 4?", result)
+        self.assertIn("They answered 6", result)
+        self.assertIn("the correct answer is 7", result)
+        self.assertNotIn("What is 2 + 2?", result)
+        self.assertNotIn("every question correctly", result)
+
+    def test_a_blank_answer_is_described_as_left_blank(self):
+        self.give_quiz()
+        self.grade({"q1": "1", "q2": ""})
+
+        adapter = FakeAdapter()
+        with LoadedModel(adapter):
+            self.send()
+
+        self.assertIn("They left it blank", adapter.quiz_results_seen[0])
+
+    def test_a_perfect_score_says_so(self):
+        self.give_quiz()
+        self.grade({"q1": "1", "q2": "3"})
+
+        adapter = FakeAdapter()
+        with LoadedModel(adapter):
+            self.send()
+
+        result = adapter.quiz_results_seen[0]
+        self.assertIn("2 of 2", result)
+        self.assertIn("every question correctly", result)
+        self.assertNotIn("got these wrong", result)
+
+    def test_a_quiz_not_yet_graded_hands_over_nothing(self):
+        self.give_quiz(status="active")
+
+        adapter = FakeAdapter()
+        with LoadedModel(adapter):
+            self.send()
+
+        self.assertEqual(adapter.quiz_results_seen, [""])
+
+    def test_the_result_is_handed_over_once(self):
+        self.give_quiz()
+        self.grade({"q1": "1", "q2": "2"})
+
+        adapter = FakeAdapter(reply="You scored 1 of 2.")
+        with LoadedModel(adapter):
+            self.send("How did I do?")
+            self.send("Thanks, what next?")
+
+        self.assertIn("1 of 2", adapter.quiz_results_seen[0])
+        self.assertEqual(adapter.quiz_results_seen[1], "")
+
+    def test_the_summary_is_not_saved_as_a_chat_row(self):
+        self.give_quiz()
+        self.grade({"q1": "1", "q2": "2"})
+        before = DBChat.objects.filter(session=self.session).count()
+
+        with LoadedModel(FakeAdapter(reply="You scored 1 of 2.")):
+            self.send("How did I do?")
+
+        rows = list(DBChat.objects.filter(session=self.session).order_by("created_at", "id"))
+        self.assertEqual(len(rows), before + 2)
+        self.assertEqual([r.role for r in rows][-2:], ["user", "assistant"])
+        for row in rows:
+            self.assertNotIn("has just submitted the quiz", row.message)
+
+    def test_a_failure_building_the_summary_returns_nothing(self):
+        self.give_quiz()
+        self.grade({"q1": "1", "q2": "2"})
+
+        with patch("tutor.views.chat.Quiz.objects") as objects:
+            objects.filter.side_effect = RuntimeError("db")
+            self.assertEqual(chat._quiz_result_summary(self.session), "")
+
+    def test_the_ledger_message_carries_a_quiz_result_on_its_own(self):
+        import languagemodel
+
+        message = languagemodel.build_ledger_message(
+            [], "", quiz_result="The student scored 1 of 2."
+        )
+
+        self.assertIn("The student scored 1 of 2.", message)
+        self.assertEqual(languagemodel.build_ledger_message([], ""), "")
+
+
+class TopicChangeTests(MasteryPilotTestCase):
+    """Ordinary words must not wipe the step ledger mid-problem."""
+
+    def test_ordinary_phrases_are_not_a_topic_change(self):
+        for text in (
+            "Should I add instead of subtract?",
+            "ok let's do the next step",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(_looks_like_topic_change(text))
+
+    def test_real_topic_changes_still_are(self):
+        for text in (
+            "never mind, new problem",
+            "let's change the topic",
+            "Actually forget that, can you help me with 7 + 2 * 3 instead?",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(_looks_like_topic_change(text))
+
+    def test_an_ordinary_message_keeps_the_ledger_end_to_end(self):
+        student = self.make_student("topic_student")
+        self.client.force_login(student)
+        session = self.make_session(student)
+        self.set_active_session(session)
+        self.bootstrap_session(session)
+        session.progress_ledger = ["Subtract 7 from both sides."]
+        session.save(update_fields=["progress_ledger"])
+
+        adapter = FakeAdapter(reply="Now divide by 3.")
+        with LoadedModel(adapter):
+            self.client.post(
+                reverse("api_chat"),
+                data=json.dumps({"message": "Should I add instead of subtract?"}),
+                content_type="application/json",
+            )
+
+        self.assertEqual(adapter.ledgers_seen, [["Subtract 7 from both sides."]])
+        session.refresh_from_db()
+        self.assertEqual(
+            session.progress_ledger,
+            ["Subtract 7 from both sides.", "Now divide by 3."],
+        )
+
+
+class FailedReplyTests(MasteryPilotTestCase):
+    """A failed reply saves nothing, so a retry does not stack user turns."""
+
+    def setUp(self):
+        self.student = self.make_student("failed_student")
+        self.client.force_login(self.student)
+        self.session = self.make_session(self.student, title="New session")
+        self.set_active_session(self.session)
+        self.bootstrap_session(self.session)
+        self.baseline = DBChat.objects.filter(session=self.session).count()
+
+    def send(self, message="How do fractions work?"):
+        return self.client.post(
+            reverse("api_chat"),
+            data=json.dumps({"message": message}),
+            content_type="application/json",
+        )
+
+    def new_rows(self):
+        return list(
+            DBChat.objects.filter(session=self.session)
+            .order_by("created_at", "id")
+            .values_list("role", "message")
+        )[self.baseline:]
+
+    def unavailable(self):
+        return (
+            patch("tutor.views.chat.model", None),
+            patch("tutor.views.chat.tokenizer", None),
+            patch("tutor.views.chat.ensure_llm_initialized"),
+        )
+
+    def test_an_unavailable_model_saves_no_rows_however_often_it_is_retried(self):
+        p1, p2, p3 = self.unavailable()
+        with p1, p2, p3:
+            for _ in range(3):
+                response = self.send()
+                self.assertTrue(response.json()["error"])
+
+        self.assertEqual(self.new_rows(), [])
+
+    def test_a_failed_reply_does_not_run_auto_titling(self):
+        p1, p2, p3 = self.unavailable()
+        with p1, p2, p3, patch("tutor.views.chat._derive_session_title") as derive:
+            self.send()
+
+        derive.assert_not_called()
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.title, "New session")
+
+    def test_a_later_success_saves_one_exchange_and_titles_the_session(self):
+        p1, p2, p3 = self.unavailable()
+        with p1, p2, p3:
+            self.send()
+            self.send()
+
+        adapter = FakeAdapter(reply="A fraction is a part of a whole.", title="Fractions")
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertNotIn("error", response.json())
+        self.assertEqual(
+            self.new_rows(),
+            [
+                ("user", "How do fractions work?"),
+                ("assistant", "A fraction is a part of a whole."),
+            ],
+        )
+        self.assertEqual(adapter.derive_title_calls, ["How do fractions work?"])
+        self.session.refresh_from_db()
+        self.assertEqual(self.session.title, "Fractions")
+
+    def test_a_generation_error_saves_no_user_row(self):
+        class Exploding(FakeAdapter):
+            def send_message(self, *args, **kwargs):
+                raise RuntimeError("out of memory")
+
+        adapter = Exploding()
+        with LoadedModel(adapter):
+            response = self.send()
+
+        self.assertTrue(response.json()["error"])
+        self.assertEqual(self.new_rows(), [])
+        self.assertEqual(adapter.derive_title_calls, [])
+
+    def test_the_chat_page_puts_a_failed_message_back_in_the_input(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "templates" / "chat.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("if (data.error) restoreMessage();", source)
+        self.assertIn("if (!chatInput.value) chatInput.value = text;", source)
+        self.assertIn("return div;", source)
