@@ -17,7 +17,7 @@
   </aside>
 
   <!-- Main Chat Window -->
-  <section class="bg-white rounded-2xl border shadow-sm flex flex-col w-full max-w-3xl mx-auto h-[calc(100vh-7.5rem)]">
+  <section class="bg-white rounded-2xl border shadow-sm flex flex-col w-full max-w-3xl mx-auto h-[calc(100vh-7.5rem)] supports-[height:100dvh]:h-[calc(100dvh-7.5rem)]">
 
     <!-- Quiz Card (hidden by default, shown when quiz is active) -->
     <div id="quizCard" class="mb-4 hidden">
@@ -31,7 +31,7 @@
       </div>
     </div>
 
-    <div id="chatLog" class="flex-1 overflow-y-auto p-5 space-y-4">
+    <div id="chatLog" role="log" aria-live="polite" aria-label="Conversation" class="flex-1 overflow-y-auto p-5 space-y-4">
       <div class="flex gap-3">
         <div class="h-8 w-8 rounded-full bg-brand-600 shrink-0"></div>
         <div class="bg-gray-100 rounded-2xl px-4 py-2" id="initial-chat">
@@ -43,6 +43,7 @@
     <!-- Message Input -->
     <div class="border-t p-3">
       <form id="chatForm" class="flex items-center gap-2">
+        <label for="chatInput" class="sr-only">Message to your tutor</label>
         <input id="chatInput" maxlength="4000" class="flex-1 rounded-xl border px-3 py-2 focus:ring-2 focus:ring-brand-500"
           placeholder="Type your question...">
         <button id="chat-send-button"
@@ -51,13 +52,13 @@
         </button>
       </form>
     </div>
-    <div id="typing-alert-div" class="px-4 py-2 font-semibold"></div>
+    <div id="typing-alert-div" role="status" class="px-4 py-2 font-semibold"></div>
 
     <!-- Quiz Feedback Modal (hidden by default) -->
-    <div id="quizFeedbackModal"
+    <div id="quizFeedbackModal" role="dialog" aria-modal="true" aria-labelledby="quizFeedbackTitle"
       class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
       <div class="bg-white rounded-2xl shadow-lg p-6 max-w-md w-full">
-        <h3 class="font-semibold text-lg mb-2">Quiz Results</h3>
+        <h3 id="quizFeedbackTitle" class="font-semibold text-lg mb-2">Quiz Results</h3>
         <div id="quizFeedbackContent" class="mb-4"></div>
         <button id="closeQuizFeedback"
           class="rounded-xl bg-brand-600 text-white px-4 py-2 font-semibold hover:bg-brand-700 transition">
@@ -110,6 +111,8 @@
   let quizActive = false;
   let activeQuizText = null;
   let activeQuizObj = null;
+  let quizModalOpener = null;
+  let slowReplyTimer = null;
 
   // --- Main chat submit ---
   chatForm.addEventListener("submit", async (e) => {
@@ -143,28 +146,34 @@
           session_id: currentSessionId
         })
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      if (data.error) restoreMessage();
-
-      if (data.session_title && currentSessionId) {
-        const titleEl = document.querySelector(
-          `#sessionList li[data-session-id="${currentSessionId}"] .session-title`
-        );
-        if (titleEl) titleEl.textContent = data.session_title;
-      }
-
-      const quizObj = parseQuizJson(data.model_text);
-      if (quizObj) {
-        activeQuizText = data.model_text;
-        activeQuizObj = quizObj;
-        showQuizCard(quizObj);
+      if (!res.ok) {
+        restoreMessage();
+        appendNotice(await describeFailure(res));
       } else {
-        appendMessage("model", data.model_text || "(no text)");
+        const data = await res.json();
+        if (data.error) restoreMessage();
+
+        if (data.session_title && currentSessionId) {
+          const titleEl = document.querySelector(
+            `#sessionList li[data-session-id="${currentSessionId}"] .session-title`
+          );
+          if (titleEl) titleEl.textContent = data.session_title;
+        }
+
+        const quizObj = parseQuizJson(data.model_text);
+        if (data.error) {
+          appendNotice(data.model_text || "The tutor could not answer. Please try again.");
+        } else if (quizObj) {
+          activeQuizText = data.model_text;
+          activeQuizObj = quizObj;
+          showQuizCard(quizObj);
+        } else {
+          appendMessage("model", data.model_text || "(no text)");
+        }
       }
     } catch (err) {
       restoreMessage();
-      appendMessage("model", "Error: " + err.message);
+      appendNotice(describeNetworkError(err));
     }
 
     await removeTypingAlert();
@@ -287,18 +296,25 @@
         credentials: "same-origin",
         body: JSON.stringify({ answers, session_id: currentSessionId })
       });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
-      const attempt = buildLocalQuizAttempt(formEntries, data.model_text);
-      // The quiz was sent without its answer key; the grade response carries
-      // the full one so the read-only view can highlight the correct options.
-      const gradedQuizText = data.quiz ? JSON.stringify({ test: data.quiz }) : activeQuizText;
-      if (gradedQuizText && attempt) {
-        appendMessage("model", gradedQuizText, attempt);
+      if (!res.ok) {
+        showQuizFeedbackModal(await describeFailure(res));
+      } else {
+        const data = await res.json();
+        // An error (no active quiz, say) grades nothing, so there is no
+        // attempt to show in the log: only the message goes in the modal.
+        if (!data.error) {
+          const attempt = buildLocalQuizAttempt(formEntries, data.model_text);
+          // The quiz was sent without its answer key; the grade response carries
+          // the full one so the read-only view can highlight the correct options.
+          const gradedQuizText = data.quiz ? JSON.stringify({ test: data.quiz }) : activeQuizText;
+          if (gradedQuizText && attempt) {
+            appendMessage("model", gradedQuizText, attempt);
+          }
+        }
+        showQuizFeedbackModal(data.model_text);
       }
-      showQuizFeedbackModal(data.model_text);
     } catch (err) {
-      showQuizFeedbackModal("Error: " + err.message);
+      showQuizFeedbackModal(describeNetworkError(err));
     }
     await removeTypingAlert();
     quizCard.classList.add("hidden");
@@ -360,8 +376,8 @@
         }
         formatted += `<div class='flex items-start gap-2'>`;
         formatted += correct
-          ? `<span class='inline-block h-6 w-6 bg-brand-600 rounded-full flex items-center justify-center text-white font-bold'>✓</span>`
-          : `<span class='inline-block h-6 w-6 bg-red-500 rounded-full flex items-center justify-center text-white font-bold'>✗</span>`;
+          ? `<span aria-hidden='true' class='inline-block h-6 w-6 bg-brand-600 rounded-full flex items-center justify-center text-white font-bold'>✓</span>`
+          : `<span aria-hidden='true' class='inline-block h-6 w-6 bg-red-500 rounded-full flex items-center justify-center text-white font-bold'>✗</span>`;
         formatted += `<div><span class='font-semibold'>${escapeHtml(qid.toUpperCase())}:</span> `;
         formatted += correct
           ? `<span class='text-brand-700'>Correct</span>`
@@ -376,12 +392,55 @@
       formatted = `<pre class='text-sm'>${escapeHtml(String(feedbackText ?? ""))}</pre>`;
     }
     quizFeedbackContent.innerHTML = formatted;
+    if (quizFeedbackModal.classList.contains("hidden")) {
+      quizModalOpener = document.activeElement;
+    }
     quizFeedbackModal.classList.remove("hidden");
+    closeQuizFeedback.focus();
   }
 
-  closeQuizFeedback.addEventListener("click", () => {
+  // One way out for the Close button and Escape: hide, clear, and hand focus
+  // back to where it was (or to the message box if that is gone or hidden).
+  function closeQuizFeedbackModal() {
     quizFeedbackModal.classList.add("hidden");
     quizFeedbackContent.innerText = "";
+    const opener = quizModalOpener;
+    quizModalOpener = null;
+    const canFocusOpener = opener && document.contains(opener) && !opener.disabled
+      && opener.getClientRects().length > 0;
+    (canFocusOpener ? opener : chatInput).focus();
+  }
+
+  closeQuizFeedback.addEventListener("click", closeQuizFeedbackModal);
+
+  // While the modal is open: Escape closes it and Tab cycles inside it.
+  document.addEventListener("keydown", (e) => {
+    if (quizFeedbackModal.classList.contains("hidden")) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeQuizFeedbackModal();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(quizFeedbackModal.querySelectorAll(
+      "a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])"
+    )).filter((el) => !el.disabled && el.getClientRects().length > 0);
+    if (focusable.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (!quizFeedbackModal.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   });
 
   // --- Typing indicator helpers ---
@@ -391,12 +450,46 @@
     alert.innerHTML = "Your AI tutor is typing...";
     typingAlertDiv.appendChild(alert);
     document.getElementById("chat-send-button").disabled = true;
+    // Replies can take a minute or two on a slow machine; say so rather than
+    // leave the student wondering. The request itself is never aborted: the
+    // server would carry on and save a reply the student never saw.
+    clearTimeout(slowReplyTimer);
+    slowReplyTimer = setTimeout(() => {
+      alert.textContent = "Still working on it. Replies can take a minute or two.";
+    }, 20000);
   }
 
   function removeTypingAlert() {
+    clearTimeout(slowReplyTimer);
     const alert = document.getElementById("typing-alert-message");
     if (alert) typingAlertDiv.removeChild(alert);
     document.getElementById("chat-send-button").disabled = false;
+  }
+
+  // --- Failure messages ---
+  // Turn a non-OK response into one short sentence for the student. Raw
+  // bodies (an HTML error page, a stack trace) never reach the page.
+  async function describeFailure(res) {
+    const fallback = `The tutor could not answer (error ${res.status}). Please try again.`;
+    try {
+      const type = res.headers.get("content-type") || "";
+      if (type.includes("json")) {
+        const body = await res.json();
+        const pick = [body && body.error, body && body.model_text]
+          .find((v) => typeof v === "string" && v.trim());
+        return pick ? pick.trim() : fallback;
+      }
+      const body = (await res.text()).trim();
+      if (body && body.length <= 300 && !body.startsWith("<")) return body;
+    } catch (_) {}
+    return fallback;
+  }
+
+  function describeNetworkError(err) {
+    if (err instanceof TypeError) {
+      return "Could not reach the server. Check your connection and try again.";
+    }
+    return "Something went wrong. Please try again.";
   }
 
   // --- Message rendering ---
@@ -410,6 +503,21 @@
       div.innerHTML = `<div class='h-8 w-8 rounded-full bg-brand-600 shrink-0'></div>
          <div class='bg-gray-100 rounded-2xl px-4 py-2 max-w-[75%]'>${rendered}</div>`;
     }
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return div;
+  }
+
+  // A problem message, deliberately unlike a tutor bubble (no avatar, full
+  // width, amber) so a failure is never mistaken for something the tutor said.
+  function appendNotice(text) {
+    const div = document.createElement("div");
+    div.className = "chat-notice w-full bg-amber-50 border border-amber-300 text-amber-900 rounded-xl px-4 py-2 text-sm";
+    const glyph = document.createElement("span");
+    glyph.setAttribute("aria-hidden", "true");
+    glyph.textContent = "⚠ ";
+    div.appendChild(glyph);
+    div.appendChild(document.createTextNode(String(text || "")));
     chatLog.appendChild(div);
     chatLog.scrollTop = chatLog.scrollHeight;
     return div;
@@ -563,18 +671,34 @@
     li.className = "session-item flex justify-between items-center p-2 rounded-lg hover:bg-gray-50 cursor-pointer";
     li.dataset.sessionId = session.id;
     li.innerHTML = `
-      <span class="session-title">${escapeHtml(session.title)}</span>
+      <button type="button" class="session-open flex-1 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 rounded"><span class="session-title">${escapeHtml(session.title)}</span></button>
       <div class="flex gap-2">
-        <button class="rename-btn text-blue-500" data-id="${session.id}">✏️</button>
-        <button class="delete-btn text-red-500" data-id="${session.id}">🗑️</button>
+        <button type="button" class="rename-btn text-blue-500" data-id="${session.id}" aria-label="Rename this chat" title="Rename this chat">✏️</button>
+        <button type="button" class="delete-btn text-red-500" data-id="${session.id}" aria-label="Delete this chat" title="Delete this chat">🗑️</button>
       </div>
     `;
+    // Clicks on the session-open button (and its Enter/Space presses, which
+    // browsers turn into clicks) bubble up to here, so this one handler loads
+    // the session exactly once whether the click lands on the button or the
+    // li's padding.
     li.addEventListener("click", (e) => {
       if (e.target.classList.contains("rename-btn")) return;
       if (e.target.classList.contains("delete-btn")) return;
       loadSessionMessages(session.id);
     });
     return li;
+  }
+
+  // Flag the open chat for screen readers: aria-current on its title button only.
+  function markActiveSession(sessionId) {
+    document.querySelectorAll("#sessionList .session-open").forEach((btn) => {
+      const li = btn.closest("li");
+      if (li && String(li.dataset.sessionId) === String(sessionId)) {
+        btn.setAttribute("aria-current", "true");
+      } else {
+        btn.removeAttribute("aria-current");
+      }
+    });
   }
 
   // --- New Session button ---
@@ -604,6 +728,7 @@
 
       const li = renderSessionListItem({ id: data.id, title: data.title });
       document.getElementById("sessionList").prepend(li);
+      markActiveSession(data.id);
 
       chatLog.innerHTML = "";
       const initial = data.model_text || `Session created: ${data.title}`;
@@ -693,6 +818,10 @@
   // --- Load messages for a session ---
   async function loadSessionMessages(sessionId) {
     currentSessionId = sessionId;
+    markActiveSession(sessionId);
+    // Busy while old history is re-rendered, so a screen reader does not read
+    // it out as if it were new replies.
+    chatLog.setAttribute("aria-busy", "true");
     chatLog.innerHTML = "";
     quizAttempts = [];
     quizAttemptIndex = 0;
@@ -702,7 +831,10 @@
         method: "GET",
         credentials: "same-origin"
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        appendNotice(await describeFailure(res));
+        return;
+      }
       const data = await res.json();
       quizAttempts = Array.isArray(data.quiz_attempts) ? data.quiz_attempts : [];
 
@@ -734,15 +866,16 @@
         body: JSON.stringify({})
       });
       if (!initRes.ok) {
-        const errText = await initRes.text();
-        appendMessage("model", "Error initializing chat: " + errText);
+        appendNotice(await describeFailure(initRes));
         return;
       }
 
       const initData = await initRes.json();
       appendMessage("model", initData.model_text || "(no text)");
     } catch (err) {
-      appendMessage("model", "Error loading chat: " + err.message);
+      appendNotice(describeNetworkError(err));
+    } finally {
+      chatLog.setAttribute("aria-busy", "false");
     }
   }
 
