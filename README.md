@@ -404,7 +404,7 @@ MIT — [see LICENSE.txt](LICENSE.txt).
 
 ## About this fork
 
-This is Luis Zarate's fork of the team repository. Its history has been
+This is my (Luis Zarate's) fork of the team repository. Its history has been
 rewritten to strip large binaries — a screen recording, textbook PDFs, and dev
 database snapshots — so commit hashes here diverge from upstream.
 Canonical upstream: [Zelefant/MasteryPilot](https://github.com/Zelefant/MasteryPilot).
