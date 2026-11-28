@@ -389,10 +389,14 @@ def _looks_like_quiz_request(text: str) -> bool:
 # runs in 3 to 1 in 5, stalling on the old problem while the student asked
 # about a new one. Clearing the ledger enforces server-side what the prompt
 # could only request.
+#
+# Bare "instead" and "let's do" are deliberately absent. They turn up in
+# ordinary mid-problem messages ("add instead of subtract?", "ok let's do the
+# next step"), and a false match wipes the steps the student has just learned.
 _TOPIC_CHANGE = re.compile(
-    r"\b(forget (that|it|this)|never ?mind|instead|different (problem|question)"
+    r"\b(forget (that|it|this)|never ?mind|different (problem|question)"
     r"|new (problem|question|topic)|change (the )?(topic|subject)"
-    r"|something else|move on|let's do)\b",
+    r"|something else|move on)\b",
     re.IGNORECASE,
 )
 
@@ -431,6 +435,70 @@ def _last_assistant_message(messages):
         if message.get("role") == "assistant":
             return message.get("content") or ""
     return ""
+
+
+def _quiz_result_summary(session) -> str:
+    """What the student scored on the session's latest quiz, as plain text.
+
+    Grading writes the result to the Quiz and QuizAnswer rows and to no Chat
+    row, so the next tutor turn would otherwise have no idea how the student
+    did. "" when the latest quiz is not graded yet, and on any failure: the
+    summary is a courtesy to the tutor and must not fail the student's turn.
+    """
+    try:
+        quiz = Quiz.objects.filter(session=session).order_by("-started_at").first()
+        if quiz is None or quiz.status != "graded":
+            return ""
+        answer = quiz.answers.order_by("-submitted_at").first()
+        if answer is None:
+            return ""
+
+        def whole(value):
+            value = float(value)
+            return int(value) if value == int(value) else value
+
+        def clip(value, limit):
+            value = " ".join(str(value or "").split())
+            return value if len(value) <= limit else value[:limit].rstrip() + "..."
+
+        graded = answer.graded_json or {}
+        test = (quiz.quiz_json or {}).get("test") or {}
+        lines = [
+            "The student has just submitted the quiz above and scored "
+            f"{whole(quiz.earned_pts)} of {whole(quiz.possible_pts)}."
+        ]
+        wrong = []
+        for qid, qdata in test.items():
+            result = graded.get(qid) or {}
+            if result.get("isCorrect"):
+                continue
+            question = clip((qdata or {}).get("question"), 200)
+            student = clip(result.get("studentAnswer"), 100)
+            correct = clip(result.get("correctAnswer"), 100)
+            if student:
+                wrong.append(
+                    f"- {question} They answered {student}; "
+                    f"the correct answer is {correct}."
+                )
+            else:
+                wrong.append(
+                    f"- {question} They left it blank; "
+                    f"the correct answer is {correct}."
+                )
+        if wrong:
+            lines.append("They got these wrong:")
+            lines.extend(wrong)
+            lines.append(
+                "Tell them their score, then go over what they got wrong "
+                "before moving on."
+            )
+        else:
+            lines.append("They answered every question correctly.")
+            lines.append("Tell them their score, congratulate them and move on.")
+        return "\n".join(lines)
+    except Exception:
+        logger.exception("Building the quiz result summary failed")
+        return ""
 
 
 def _is_stalled(reply, previous, ratio=STALL_RATIO):
@@ -650,13 +718,21 @@ def api_chat(request):
         # A quiz is not a question the tutor is waiting on: it is answered in
         # the quiz form, and its JSON would be handed to pending_question as if
         # it were prose.
-        if not _looks_like_topic_change(msg) and _try_extract_quiz_json(previous) is None:
-            from languagemodel import pending_question
+        quiz_result = ""
+        if _try_extract_quiz_json(previous) is None:
+            if not _looks_like_topic_change(msg):
+                from languagemodel import pending_question
 
-            waiting_on = pending_question(previous)
+                waiting_on = pending_question(previous)
+        else:
+            # The tutor's last turn was a quiz, so the student may have just
+            # submitted it. Grading writes no Chat row, so hand the result over
+            # here; it rides on this turn only and is never persisted.
+            quiz_result = _quiz_result_summary(active_session)
         try:
             assistant_reply_text, messages = _adapter().send_message(
-                model, tokenizer, chat, msg, ledger=ledger, waiting_on=waiting_on
+                model, tokenizer, chat, msg, ledger=ledger, waiting_on=waiting_on,
+                quiz_result=quiz_result,
             )
 
             # The tutor's commonest failure is repeating its previous reply
@@ -676,7 +752,7 @@ def api_chat(request):
                 logger.info("Reply repeated the previous one - regenerating once")
                 nudged, _ = _adapter().send_message(
                     model, tokenizer, list(history), f"{msg}\n\n{STALL_NUDGE}",
-                    ledger=ledger, waiting_on=waiting_on,
+                    ledger=ledger, waiting_on=waiting_on, quiz_result=quiz_result,
                 )
                 if nudged and not _is_stalled(nudged, previous):
                     assistant_reply_text = nudged
@@ -732,6 +808,10 @@ def api_chat(request):
             error_occurred = True
 
     # Persist to DB: only persist user + assistant when there was no model error.
+    # A failed reply saves nothing, the student's message included. Saved alone
+    # it left two user turns in a row in the history (Mistral's chat template
+    # requires strict alternation) and one more copy of the message per retry.
+    # The client puts the text back in the input box so the student can resend.
     new_session_title = None
     try:
         session = active_session
@@ -744,7 +824,8 @@ def api_chat(request):
         # bootstrap turn start_chat persists is also role="user", so a bare
         # .exists() check here was true on every request and auto-titling
         # never ran.
-        if session.title in ("", "New session") and not _has_student_message(session):
+        if (not error_occurred and session.title in ("", "New session")
+                and not _has_student_message(session)):
             try:
                 derived = _derive_session_title(msg)
             except Exception:
@@ -755,7 +836,8 @@ def api_chat(request):
                 session.save(update_fields=["title"])
                 new_session_title = session.title
 
-        DBChat.objects.create(session=session, role="user", message=msg)
+        if not error_occurred:
+            DBChat.objects.create(session=session, role="user", message=msg)
         if not error_occurred and assistant_reply_text:
             # Persist the quiz first: it shuffles the options, so the text
             # stored as the assistant's message has to be the stored quiz

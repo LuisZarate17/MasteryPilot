@@ -637,6 +637,29 @@ class LedgerWiringTests(SimpleTestCase):
         self.assertIn("Subtracted 7.", content)
         self.assertIn("next?", content)
 
+    def test_a_quiz_result_reaches_the_model_on_the_student_turn(self):
+        """The view hands the score over; the adapter must not drop it."""
+        adapter = get_adapter("qwen")
+        seen = {}
+
+        with mock.patch.object(adapter, "_generate",
+                               side_effect=lambda m, t, mm, **k: seen.setdefault("m", mm) and ""), \
+                mock.patch("rag.retrieve", return_value=[]), \
+                mock.patch("rag.build_rag_system_message", return_value=""):
+            adapter.send_message(
+                object(), object(),
+                [{"role": "system", "content": "S"},
+                 {"role": "user", "content": "B"},
+                 {"role": "assistant", "content": "H"}],
+                "how did I do?",
+                quiz_result="The student has just submitted the quiz above and scored 1 of 2.",
+            )
+
+        self.assertEqual(seen["m"][-1]["role"], "user")
+        self.assertIn("scored 1 of 2", seen["m"][-1]["content"])
+        self.assertIn("how did I do?", seen["m"][-1]["content"])
+        self.assertNotIn("system", [m["role"] for m in seen["m"][1:]])
+
 
 class RagContextPlacementTests(SimpleTestCase):
     """Retrieved curriculum joins the student's turn, not a trailing system one.
